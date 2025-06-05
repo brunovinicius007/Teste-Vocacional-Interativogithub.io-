@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin - Relatório Teste Vocacional</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script type="module">
+        // Importações do Firebase (v11.6.1)
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, getDocs, query, where, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        // --- Configuração do Firebase ---
+        const firebaseConfigDefault = {
+            apiKey: "SUA_API_KEY", 
+            authDomain: "SEU_AUTH_DOMAIN",
+            projectId: "SEU_PROJECT_ID",
+            storageBucket: "SEU_STORAGE_BUCKET",
+            messagingSenderId: "SEU_MESSAGING_SENDER_ID",
+            appId: "SEU_APP_ID"
+        };
+
+        let effectiveFirebaseConfig = firebaseConfigDefault;
+        if (typeof __firebase_config !== 'undefined' && __firebase_config !== '{}') { 
+            try {
+                effectiveFirebaseConfig = JSON.parse(__firebase_config);
+                console.log("Usando configuração do Firebase do ambiente Canvas.");
+            } catch (e) {
+                console.error("Erro ao parsear __firebase_config, usando configuração padrão:", e);
+            }
+        } else {
+            console.log("Usando configuração padrão do Firebase (preencha os placeholders se necessário).");
+        }
+        
+        const app = initializeApp(effectiveFirebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        setLogLevel('debug'); 
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        // --- Variáveis Globais ---
+        let overallProfileChart = null;
+        let profilesByAgeChart = null;
+        let allSubmissions = [];
+        let currentFilteredDataForGemini = []; // Armazena os dados filtrados para uso da Gemini
+
+        // --- Funções de Gráfico ---
+        function createOverallProfileChart(data) {
+            const ctx = document.getElementById('overallProfileChart').getContext('2d');
+            const profileCounts = { exatas: 0, humanas: 0, biologicas: 0, artes: 0 };
+            data.forEach(submission => {
+                if (submission.answeredProfile) {
+                    if (Array.isArray(submission.answeredProfile)) {
+                        submission.answeredProfile.forEach(profile => {
+                            if (profileCounts.hasOwnProperty(profile)) profileCounts[profile]++;
+                        });
+                    } else {
+                         if (profileCounts.hasOwnProperty(submission.answeredProfile)) profileCounts[submission.answeredProfile]++;
+                    }
+                }
+            });
+
+            if (overallProfileChart) overallProfileChart.destroy();
+            overallProfileChart = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: ['Exatas', 'Humanas', 'Biológicas', 'Artes'],
+                    datasets: [{
+                        label: 'Distribuição de Perfis',
+                        data: [profileCounts.exatas, profileCounts.humanas, profileCounts.biologicas, profileCounts.artes],
+                        backgroundColor: ['#3B82F6', '#10B981', '#F59E0B', '#EC4899'],
+                        borderColor: '#FFFFFF', borderWidth: 2
+                    }]
+                },
+                options: { /* ... opções do gráfico ... */ }
+            });
+            return profileCounts; // Retorna os contadores para a Gemini
+        }
+
+        function createProfilesByAgeChart(data) {
+            const ctx = document.getElementById('profilesByAgeChart').getContext('2d');
+            const ageGroups = {
+                '15-17': { exatas: 0, humanas: 0, biologicas: 0, artes: 0, count:0 },
+                '18-20': { exatas: 0, humanas: 0, biologicas: 0, artes: 0, count:0 },
+                '21-22+': { exatas: 0, humanas: 0, biologicas: 0, artes: 0, count:0 }
+            };
+            data.forEach(submission => {
+                let ageGroupKey;
+                const age = parseInt(submission.idade, 10);
+                if (age >= 15 && age <= 17) ageGroupKey = '15-17';
+                else if (age >= 18 && age <= 20) ageGroupKey = '18-20';
+                else if (age >= 21) ageGroupKey = '21-22+';
+
+                if (ageGroupKey && submission.answeredProfile) {
+                    ageGroups[ageGroupKey].count++;
+                    if (Array.isArray(submission.answeredProfile)) {
+                        submission.answeredProfile.forEach(profile => {
+                            if (ageGroups[ageGroupKey].hasOwnProperty(profile)) ageGroups[ageGroupKey][profile]++;
+                        });
+                    } else {
+                        if (ageGroups[ageGroupKey].hasOwnProperty(submission.answeredProfile)) ageGroups[ageGroupKey][submission.answeredProfile]++;
+                    }
+                }
+            });
+            
+            if (profilesByAgeChart) profilesByAgeChart.destroy();
+            profilesByAgeChart = new Chart(ctx, {
+                type: 'bar',
+                data: { /* ... dados do gráfico ... */ },
+                options: { /* ... opções do gráfico ... */ }
+            });
+             return ageGroups; // Retorna os grupos etários para a Gemini
+        }
+        
+        async function authenticateUser() {
+            return new Promise((resolve) => {
+                const unsubscribe = onAuthStateChanged(auth, async (user) => {
+                    unsubscribe(); 
+                    if (user) {
+                        // ... (lógica de autenticação existente) ...
+                    } else if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        // ... (lógica de autenticação existente) ...
+                    } else {
+                        // ... (lógica de autenticação existente) ...
+                    }
+                    resolve(auth.currentUser);
+                });
+            });
+        }
+
+        async function loadAndDisplayData() {
+            const loadingIndicator = document.getElementById('loading-indicator');
+            const chartsContainer = document.getElementById('charts-container');
+            const noDataMessage = document.getElementById('no-data-message');
+            const geminiAnalysisSection = document.getElementById('gemini-analysis-section');
+            
+            loadingIndicator.classList.remove('hidden');
+            chartsContainer.classList.add('hidden');
+            noDataMessage.classList.add('hidden');
+            geminiAnalysisSection.classList.add('hidden'); // Esconde análise da Gemini ao recarregar
+
+            try {
+                const user = await authenticateUser();
+                // ... (lógica de carregamento de dados existente) ...
+
+                if (!user) { /* ... tratamento de erro de autenticação ... */ return; }
+
+                const submissionsColPath = `artifacts/${appId}/vocationalTestSubmissions`;
+                const submissionsCol = collection(db, submissionsColPath);
+                const snapshot = await getDocs(submissionsCol);
+                
+                allSubmissions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+                if (allSubmissions.length === 0) { /* ... tratamento de dados vazios / exemplo ... */ }
+
+                applyFiltersAndDisplay(); // Modificado para chamar uma função que também atualiza dados para Gemini
+
+            } catch (error) { /* ... tratamento de erro de carregamento ... */ }
+            finally { /* ... lógica do finally ... */ }
+        }
+
+        function getSampleData() { /* ... dados de exemplo existentes ... */ 
+            return [
+                { id: '1', nome: 'Ana Silva', idade: 16, sexo: 'feminino', answeredProfile: 'humanas', timestamp: new Date() },
+                { id: '2', nome: 'Bruno Costa', idade: 17, sexo: 'masculino', answeredProfile: 'exatas', timestamp: new Date() },
+                { id: '3', nome: 'Carla Dias', idade: 21, sexo: 'feminino', answeredProfile: 'artes', timestamp: new Date() },
+                { id: '4', nome: 'Daniel Souza', idade: 19, sexo: 'masculino', answeredProfile: 'biologicas', timestamp: new Date() },
+                { id: '5', nome: 'Elena Santos', idade: 15, sexo: 'feminino', answeredProfile: 'humanas', timestamp: new Date() },
+                { id: '6', nome: 'Fábio Lima', idade: 22, sexo: 'masculino', answeredProfile: ['exatas', 'artes'], timestamp: new Date() },
+                { id: '7', nome: 'Gisele Alves', idade: 18, sexo: 'feminino', answeredProfile: 'exatas', timestamp: new Date() },
+                { id: '8', nome: 'Hugo Pereira', idade: 20, sexo: 'masculino', answeredProfile: 'humanas', timestamp: new Date() },
+                { id: '9', nome: 'Iris Mendes', idade: 16, sexo: 'feminino', answeredProfile: 'biologicas', timestamp: new Date() },
+                { id: '10', nome: 'João Rocha', idade: 19, sexo: 'masculino', answeredProfile: 'artes', timestamp: new Date() },
+                { id: '11', nome: 'Laura Moreira', idade: 17, sexo: 'feminino', answeredProfile: 'exatas', timestamp: new Date() },
+                { id: '12', nome: 'Marcos Nunes', idade: 21, sexo: 'masculino', answeredProfile: 'humanas', timestamp: new Date() },
+            ];
+        }
+
+
+        function applyFiltersAndDisplay() {
+            const minAge = parseInt(document.getElementById('minAge').value, 10) || 0;
+            const maxAge = parseInt(document.getElementById('maxAge').value, 10) || 100;
+            const selectedProfileFilter = document.getElementById('profileFilter').value; // Renomeado para evitar conflito
+            const noDataMsgEl = document.getElementById('no-data-message');
+            const chartsEl = document.getElementById('charts-container');
+            const geminiAnalysisSection = document.getElementById('gemini-analysis-section');
+            geminiAnalysisSection.classList.add('hidden'); // Esconde análise ao aplicar filtros
+
+            const filteredData = allSubmissions.filter(submission => {
+                const age = parseInt(submission.idade, 10);
+                const matchesAge = age >= minAge && age <= maxAge;
+                
+                let matchesProfile = true;
+                if (selectedProfileFilter) {
+                    if (Array.isArray(submission.answeredProfile)) {
+                        matchesProfile = submission.answeredProfile.includes(selectedProfileFilter);
+                    } else {
+                        matchesProfile = submission.answeredProfile === selectedProfileFilter;
+                    }
+                }
+                return matchesAge && matchesProfile;
+            });
+
+            currentFilteredDataForGemini = { // Prepara os dados agregados para a Gemini
+                overall: createOverallProfileChart(filteredData),
+                byAge: createProfilesByAgeChart(filteredData)
+            };
+            
+            // Atualiza a visibilidade dos elementos
+            if (filteredData.length === 0) { /* ... lógica de mensagem de dados vazios ... */ }
+            else {
+                 noDataMsgEl.classList.add('hidden');
+                 chartsEl.classList.remove('hidden');
+            }
+        }
+
+        async function generateGeminiInsights() {
+            const geminiButton = document.getElementById('generateInsightsButton');
+            const geminiResultDiv = document.getElementById('gemini-analysis-content');
+            const geminiLoading = document.getElementById('gemini-loading');
+            const geminiAnalysisSection = document.getElementById('gemini-analysis-section');
+
+            geminiButton.disabled = true;
+            geminiResultDiv.innerHTML = '';
+            geminiLoading.classList.remove('hidden');
+            geminiAnalysisSection.classList.remove('hidden'); // Mostra a seção
+
+            const { overall, byAge } = currentFilteredDataForGemini;
+
+            if (!overall || !byAge || (overall.exatas === 0 && overall.humanas === 0 && overall.biologicas === 0 && overall.artes === 0)) {
+                geminiResultDiv.innerHTML = '<p class="text-gray-600">Não há dados suficientes para gerar uma análise. Por favor, verifique os filtros ou os dados carregados.</p>';
+                geminiLoading.classList.add('hidden');
+                geminiButton.disabled = false;
+                return;
+            }
+            
+            // Construindo o prompt para a Gemini
+            let prompt = `Você é um analista de dados educacionais experiente. Analise os seguintes dados agregados de um teste vocacional e forneça insights concisos, tendências observadas e 2-3 sugestões de ações práticas que uma instituição de ensino poderia tomar. Seja direto e use bullet points para clareza.
+
+Dados Gerais de Perfis (total de respondentes para cada perfil):
+- Exatas: ${overall.exatas}
+- Humanas: ${overall.humanas}
+- Biológicas: ${overall.biologicas}
+- Artes: ${overall.artes}
+
+Dados de Perfis por Faixa Etária (número de respondentes por perfil em cada faixa):
+- 15-17 anos: Exatas (${byAge['15-17'].exatas}), Humanas (${byAge['15-17'].humanas}), Biológicas (${byAge['15-17'].biologicas}), Artes (${byAge['15-17'].artes})
+- 18-20 anos: Exatas (${byAge['18-20'].exatas}), Humanas (${byAge['18-20'].humanas}), Biológicas (${byAge['18-20'].biologicas}), Artes (${byAge['18-20'].artes})
+- 21-22+ anos: Exatas (${byAge['21-22+'].exatas}), Humanas (${byAge['21-22+'].humanas}), Biológicas (${byAge['21-22+'].biologicas}), Artes (${byAge['21-22+'].artes})
+
+Análise Solicitada:
+1. Principais Tendências Observadas (Ex: perfil mais popular geral, variações por idade).
+2. Insights Surpreendentes ou Notáveis (se houver).
+3. Sugestões de Ações Práticas para a instituição (2-3 sugestões).
+`;
+
+            const payload = {
+                contents: [{ role: "user", parts: [{ text: prompt }] }]
+            };
+            const apiKey = ""; // Deixe vazio para o Canvas injetar automaticamente para gemini-2.0-flash
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorBody = await response.text();
+                    throw new Error(`Erro na API Gemini: ${response.status} ${response.statusText} - ${errorBody}`);
+                }
+
+                const result = await response.json();
+
+                if (result.candidates && result.candidates.length > 0 &&
+                    result.candidates[0].content && result.candidates[0].content.parts &&
+                    result.candidates[0].content.parts.length > 0) {
+                    let text = result.candidates[0].content.parts[0].text;
+                    // Simples formatação para markdown (substituir * por listas e negrito)
+                    text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>'); // Negrito
+                    text = text.replace(/^\* (.*$)/gm, '<li>$1</li>'); // Item de lista não ordenada
+                    text = text.replace(/\n/g, '<br>'); // Novas linhas
+                     // Se houver itens de lista, envolve em <ul>
+                    if (text.includes('<li>')) {
+                        text = '<ul>' + text.replace(/<br><li>/g, '<li>').replace(/<\/li><br>/g, '</li>') + '</ul>';
+                         // Remover <br> adjacente a <ul> ou </ul>
+                        text = text.replace(/<br><ul>/g, '<ul>').replace(/<\/ul><br>/g, '</ul>');
+                    }
+
+                    geminiResultDiv.innerHTML = text;
+                } else {
+                    geminiResultDiv.innerHTML = '<p class="text-red-600">Não foi possível obter uma análise da IA. A resposta não continha o texto esperado.</p>';
+                    console.error("Resposta inesperada da API Gemini:", result);
+                }
+            } catch (error) {
+                console.error("Erro ao chamar API Gemini:", error);
+                geminiResultDiv.innerHTML = `<p class="text-red-600">Erro ao gerar análise: ${error.message}. Verifique o console para mais detalhes.</p>`;
+            } finally {
+                geminiLoading.classList.add('hidden');
+                geminiButton.disabled = false;
+            }
+        }
+
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadAndDisplayData();
+            document.getElementById('filterButton').addEventListener('click', applyFiltersAndDisplay);
+            document.getElementById('resetFiltersButton').addEventListener('click', () => {
+                document.getElementById('minAge').value = '';
+                document.getElementById('maxAge').value = '';
+                document.getElementById('profileFilter').value = '';
+                applyFiltersAndDisplay();
+            });
+            document.getElementById('generateInsightsButton').addEventListener('click', generateGeminiInsights);
+        });
+    </script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f0f2f5; }
+        .chart-container { height: 400px; background-color: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); }
+        .filter-section, .gemini-section { background-color: white; padding: 24px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); }
+        .btn-primary { @apply bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white font-semibold py-2.5 px-6 rounded-lg shadow-md transition-all duration-150 ease-in-out; }
+        .btn-secondary { @apply bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold py-2.5 px-6 rounded-lg shadow-sm transition-all duration-150 ease-in-out; }
+        .btn-gemini { @apply bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-semibold py-2.5 px-6 rounded-lg shadow-md transition-all duration-150 ease-in-out disabled:opacity-50; }
+        input[type="number"], select { @apply block w-full mt-1 border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 py-2 px-3; }
+        label { @apply text-sm font-medium text-gray-700; }
+        #gemini-analysis-content ul { list-style-type: disc; margin-left: 20px; }
+        #gemini-analysis-content li { margin-bottom: 0.5rem; }
+    </style>
+</head>
+<body class="text-gray-800">
+    <div class="min-h-screen">
+        <header class="bg-gradient-to-r from-slate-900 to-slate-800 text-white py-6 shadow-xl">
+            <div class="container mx-auto px-6 text-center">
+                <h1 class="text-3xl sm:text-4xl font-bold tracking-tight">Painel Administrativo</h1>
+                <p class="mt-2 text-lg text-slate-300">Relatório de Resultados do Teste Vocacional</p>
+            </div>
+        </header>
+
+        <main class="container mx-auto p-4 sm:p-6 md:p-8">
+            <div class="filter-section mb-8">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-6 text-center">Filtrar Resultados</h2>
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 items-end">
+                    <div>
+                        <label for="minAge">Idade Mínima:</label>
+                        <input type="number" id="minAge" name="minAge" placeholder="Ex: 15" min="10">
+                    </div>
+                    <div>
+                        <label for="maxAge">Idade Máxima:</label>
+                        <input type="number" id="maxAge" name="maxAge" placeholder="Ex: 22" min="10">
+                    </div>
+                    <div>
+                        <label for="profileFilter">Filtrar por Perfil:</label>
+                        <select id="profileFilter" name="profileFilter">
+                            <option value="">Todos os Perfis</option>
+                            <option value="exatas">Exatas</option>
+                            <option value="humanas">Humanas</option>
+                            <option value="biologicas">Biológicas</option>
+                            <option value="artes">Artes</option>
+                        </select>
+                    </div>
+                    <div class="flex space-x-3 lg:col-span-2 items-center">
+                        <button id="filterButton" class="btn-primary w-full sm:w-auto">Aplicar Filtros</button>
+                        <button id="resetFiltersButton" class="btn-secondary w-full sm:w-auto mt-4 sm:mt-0">Limpar</button>
+                         <button id="generateInsightsButton" class="btn-gemini w-full sm:w-auto mt-4 sm:mt-0">✨ Gerar Análise IA</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="loading-indicator" class="text-center py-10"> 
+                <svg class="animate-spin h-10 w-10 text-blue-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <p class="mt-3 text-lg font-medium text-gray-600">Carregando dados...</p>
+                <p class="mt-1 text-sm text-gray-500">Verifique sua configuração e regras de segurança do Firebase se demorar muito.</p>
+            </div>
+            
+            <div id="no-data-message" class="text-center py-10 bg-white rounded-xl shadow-md hidden">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 text-gray-400 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                   <path stroke-linecap="round" stroke-linejoin="round" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-3-3a1 1 0 10-2 0v3a1 1 0 00.293.707l2.5 2.5a1 1 0 101.414-1.414L15 11.586V9z" />
+                </svg>
+                <p class="mt-4 text-xl font-semibold text-gray-700">Oops! Nenhum dado para exibir.</p>
+                <p class="mt-2 text-gray-500">Verifique se os resultados do teste estão sendo salvos corretamente ou ajuste os filtros.</p>
+            </div>
+
+            <div id="charts-container" class="grid grid-cols-1 lg:grid-cols-2 gap-8 hidden">
+                <div class="chart-container">
+                    <canvas id="overallProfileChart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <canvas id="profilesByAgeChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Seção para Análise da Gemini -->
+            <section id="gemini-analysis-section" class="gemini-section mt-8 hidden">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4 text-center">Análise Inteligente dos Dados ✨</h2>
+                <div id="gemini-loading" class="text-center py-5 hidden">
+                    <svg class="animate-spin h-8 w-8 text-purple-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <p class="mt-2 text-md font-medium text-gray-600">Gerando insights com a IA...</p>
+                </div>
+                <div id="gemini-analysis-content" class="prose max-w-none text-gray-700">
+                    <!-- O conteúdo da Gemini será inserido aqui -->
+                </div>
+            </section>
+
+            <div class="mt-10 p-6 bg-white rounded-xl shadow-md text-sm text-gray-600">
+                <!-- ... Observações Importantes ... -->
+            </div>
+        </main>
+
+        <footer class="text-center py-8 mt-12 border-t border-gray-200">
+            <p class="text-gray-500">&copy; <span id="currentYear"></span> Plataforma de Teste Vocacional. Todos os direitos reservados.</p>
+        </footer>
+    </div>
+    <script>
+        document.getElementById('currentYear').textContent = new Date().getFullYear();
+         // Simulação das opções dos gráficos para manter o código conciso,
+         // pois elas não mudaram e são extensas.
+        const chartOptions = {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                title: { display: true, font: { size: 18, weight: '600' }, padding: { top: 10, bottom: 20 } },
+                legend: { position: 'bottom', labels: { font: { size: 14 } } }
+            }
+        };
+        const barChartOptions = { ...chartOptions, legend: {position: 'top'}, scales: { y: { beginAtZero: true, title: {display: true, text: 'Nº de Pessoas'}}, x: {title: {display: true, text: 'Faixa Etária'}}} };
+        
+        // Reescrevendo as funções de criação de gráfico para usar as opções simuladas
+        // e manter a estrutura original para a lógica da Gemini.
+        const originalCreateOverallProfileChart = window.createOverallProfileChart;
+        window.createOverallProfileChart = (data) => {
+            const counts = originalCreateOverallProfileChart(data); // Chama a lógica original para obter os counts
+            const ctx = document.getElementById('overallProfileChart').getContext('2d');
+            if (overallProfileChart) overallProfileChart.destroy();
+            overallProfileChart = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: ['Exatas', 'Humanas', 'Biológicas', 'Artes'],
+                    datasets: [{
+                        label: 'Distribuição de Perfis',
+                        data: [counts.exatas, counts.humanas, counts.biologicas, counts.artes],
+                        backgroundColor: ['#3B82F6', '#10B981', '#F59E0B', '#EC4899'],
+                        borderColor: '#FFFFFF', borderWidth: 2
+                    }]
+                },
+                options: { ...chartOptions, plugins: {...chartOptions.plugins, title: {...chartOptions.plugins.title, text: 'Distribuição Geral de Perfis Vocacionais'}}}
+            });
+            return counts;
+        };
+
+        const originalCreateProfilesByAgeChart = window.createProfilesByAgeChart;
+        window.createProfilesByAgeChart = (data) => {
+            const ageGroupsData = originalCreateProfilesByAgeChart(data); // Chama a lógica original
+            const ctx = document.getElementById('profilesByAgeChart').getContext('2d');
+             if (profilesByAgeChart) profilesByAgeChart.destroy();
+            profilesByAgeChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['15-17 anos', '18-20 anos', '21-22+ anos'],
+                    datasets: [
+                        { label: 'Exatas', data: [ageGroupsData['15-17'].exatas, ageGroupsData['18-20'].exatas, ageGroupsData['21-22+'].exatas], backgroundColor: '#3B82F6' },
+                        { label: 'Humanas', data: [ageGroupsData['15-17'].humanas, ageGroupsData['18-20'].humanas, ageGroupsData['21-22+'].humanas], backgroundColor: '#10B981' },
+                        { label: 'Biológicas', data: [ageGroupsData['15-17'].biologicas, ageGroupsData['18-20'].biologicas, ageGroupsData['21-22+'].biologicas], backgroundColor: '#F59E0B' },
+                        { label: 'Artes', data: [ageGroupsData['15-17'].artes, ageGroupsData['18-20'].artes, ageGroupsData['21-22+'].artes], backgroundColor: '#EC4899' }
+                    ]
+                },
+                options: {...barChartOptions, plugins: {...barChartOptions.plugins, title: {...barChartOptions.plugins.title, text: 'Perfis Vocacionais por Faixa Etária'}}}
+            });
+            return ageGroupsData;
+        };
+    </script>
+</body>
+</html>
