@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plataforma Vocacional Integrada</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f0f2f5; }
+        .chart-container { height: 400px; background-color: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); }
+        .section-card { background-color: white; padding: 24px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); }
+        .btn-primary { @apply bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white font-semibold py-2.5 px-6 rounded-lg shadow-md transition-all duration-150 ease-in-out; }
+        .btn-secondary { @apply bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold py-2.5 px-6 rounded-lg shadow-sm transition-all duration-150 ease-in-out; }
+        .btn-admin-toggle { @apply bg-slate-700 hover:bg-slate-800 text-white font-semibold py-2 px-4 rounded-lg shadow-sm transition-all duration-150 ease-in-out text-sm; }
+        .btn-gemini { @apply bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-semibold py-2.5 px-6 rounded-lg shadow-md transition-all duration-150 ease-in-out disabled:opacity-50; }
+        input[type="text"], input[type="number"], input[type="tel"], select { @apply block w-full mt-1 border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 py-2.5 px-3; }
+        label { @apply text-sm font-medium text-gray-700; }
+        .error-message { color: #dc2626; font-size: 0.875rem; margin-top: 0.5rem; }
+        .personal-info-label { @apply block text-sm font-medium text-gray-700 mb-1 text-left; }
+        .option-btn { transition: all 0.2s ease-in-out; border: 2px solid transparent; }
+        .option-btn.selected { background-color: #3b82f6; color: white; border-color: #2563eb; }
+        .option-btn:hover:not(.selected) { background-color: #e5e7eb; }
+        #gemini-analysis-content ul, #gemini-content-suggestion-content ul { list-style-type: disc; margin-left: 20px; }
+        #gemini-analysis-content li, #gemini-content-suggestion-content li { margin-bottom: 0.5rem; }
+    </style>
+    <script type="module">
+        // Importações do Firebase (v11.6.1)
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, getDocs, addDoc, serverTimestamp, query, where, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        // --- Configuração Geral ---
+        const ADMIN_PASSWORD = "admin123"; // SENHA SIMULADA - NÃO USE EM PRODUÇÃO!
+        const firebaseConfigDefault = { /* ... sua config ... */ };
+        let effectiveFirebaseConfig = firebaseConfigDefault;
+        // ... (lógica de __firebase_config) ...
+        if (typeof __firebase_config !== 'undefined' && __firebase_config !== '{}') { 
+            try { effectiveFirebaseConfig = JSON.parse(__firebase_config); } 
+            catch (e) { console.error("Erro parse __firebase_config:", e); }
+        }
+        
+        const app = initializeApp(effectiveFirebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        setLogLevel('debug'); 
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        // --- Variáveis Globais de Estado e Elementos ---
+        let isAdminView = false;
+        let overallProfileChart = null;
+        let profilesByAgeChart = null;
+        let allSubmissions = []; // Para o relatório admin
+        let currentAggregatedDataForGemini = {};
+        let userTestAnswers = {}; // Para o teste do usuário
+
+        const mainHeader = document.getElementById('main-header');
+        const userTestSection = document.getElementById('user-test-section');
+        const adminReportSection = document.getElementById('admin-report-section');
+        const thankYouSection = document.getElementById('thank-you-section');
+        const adminToggleButton = document.getElementById('adminToggleButton');
+        const quizContainer = document.getElementById('quiz-container'); // Teste
+
+        // --- DADOS DO QUIZ (Teste Vocacional) ---
+        const quizData = [ /* ... Seus dados do quiz aqui (8 perguntas) ... */
+            {
+                question: "No seu tempo livre, o que você mais gosta de fazer?",
+                answers: [
+                    { text: "Resolver quebra-cabeças, jogar jogos de estratégia ou programar.", profile: "exatas" },
+                    { text: "Ler sobre história, debater atualidades ou escrever textos.", profile: "humanas" },
+                    { text: "Cuidar de plantas/animais, fazer trilhas ou aprender sobre o corpo humano.", profile: "biologicas" },
+                    { text: "Desenhar, tocar um instrumento, fotografar ou criar algo novo.", profile: "artes" }
+                ]
+            },
+            // ... (restante das 7 perguntas omitidas para brevidade, mas devem estar aqui)
+             {
+                question: "Se um grupo de amigos precisa de ajuda para organizar uma viagem, qual seria sua principal contribuição?",
+                answers: [
+                    { text: "Criar uma planilha detalhada com custos, rotas e horários.", profile: "exatas" },
+                    { text: "Pesquisar a cultura local, os pontos históricos e garantir que todos se comuniquem bem.", profile: "humanas" },
+                    { text: "Planejar as atividades ao ar livre, como trilhas e passeios na natureza.", profile: "biologicas" },
+                    { text: "Criar um roteiro visualmente incrível e um diário de bordo criativo para a viagem.", profile: "artes" }
+                ]
+            },
+            {
+                question: "Qual tipo de filme ou série mais te atrai?",
+                answers: [
+                    { text: "Ficção científica com tecnologias complexas e dilemas lógicos.", profile: "exatas" },
+                    { text: "Dramas históricos, documentários sociais ou thrillers políticos.", profile: "humanas" },
+                    { text: "Documentários sobre a vida selvagem, a natureza ou dramas médicos.", profile: "biologicas" },
+                    { text: "Filmes com fotografia impecável, animações ou musicais.", profile: "artes" }
+                ]
+            },
+            {
+                question: "Na escola, qual área de matérias te deixava mais à vontade?",
+                answers: [
+                    { text: "Matemática, Física e Química.", profile: "exatas" },
+                    { text: "História, Geografia, Sociologia e Português.", profile: "humanas" },
+                    { text: "Biologia e Educação Física.", profile: "biologicas" },
+                    { text: "Artes e Literatura.", profile: "artes" }
+                ]
+            },
+            {
+                question: "Qual problema você sentiria mais satisfação em resolver?",
+                answers: [
+                    { text: "Desenvolver um novo aplicativo que otimiza uma tarefa do dia a dia.", profile: "exatas" },
+                    { text: "Mediar um conflito entre dois grupos com opiniões diferentes.", profile: "humanas" },
+                    { text: "Encontrar uma forma de proteger uma espécie em extinção.", profile: "biologicas" },
+                    { text: "Criar uma campanha visual para uma causa social importante.", profile: "artes" }
+                ]
+            },
+            {
+                question: "Como você prefere aprender algo novo?",
+                answers: [
+                    { text: "Entendendo a lógica e a estrutura por trás do conceito.", profile: "exatas" },
+                    { text: "Lendo, discutindo e conectando o novo conceito com o contexto social e histórico.", profile: "humanas" },
+                    { text: "Observando na prática, experimentando e interagindo com o objeto de estudo.", profile: "biologicas" },
+                    { text: "De forma intuitiva, através de imagens, sons e sensações.", profile: "artes" }
+                ]
+            },
+            {
+                question: "Qual ambiente de trabalho te parece mais interessante?",
+                answers: [
+                    { text: "Um laboratório de tecnologia, um escritório de engenharia ou uma startup.", profile: "exatas" },
+                    { text: "Uma ONG, um escritório de advocacia, uma redação de jornal ou uma sala de aula.", profile: "humanas" },
+                    { text: "Um hospital, um laboratório de pesquisa biológica, um parque ecológico ou um consultório.", profile: "biologicas" },
+                    { text: "Um estúdio de design, uma agência de publicidade, um ateliê ou um palco.", profile: "artes" }
+                ]
+            },
+            {
+                question: "O que é mais importante para você em uma futura carreira?",
+                answers: [
+                    { text: "Resolver desafios lógicos, inovar e criar soluções eficientes.", profile: "exatas" },
+                    { text: "Ajudar pessoas, entender a sociedade e promover o diálogo.", profile: "humanas" },
+                    { text: "Cuidar da saúde e do bem-estar dos seres vivos e do planeta.", profile: "biologicas" },
+                    { text: "Expressar ideias, emoções e criar beleza e significado no mundo.", profile: "artes" }
+                ]
+            }
+        ];
+
+
+        // --- FUNÇÕES DO TESTE DO USUÁRIO ---
+        function loadUserQuiz() {
+            quizContainer.innerHTML = ''; // Limpa quiz anterior
+            userTestAnswers = {}; // Reseta respostas
+            quizData.forEach((item, index) => {
+                const questionEl = document.createElement('div');
+                questionEl.classList.add('section-card', 'mb-6', 'bg-white', 'p-6', 'rounded-xl', 'shadow-md');
+                questionEl.innerHTML = `
+                    <p class="text-lg font-semibold mb-4 text-gray-800">${index + 1}. ${item.question}</p>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        ${item.answers.map(answer => `
+                            <button class="option-btn w-full text-left p-3 bg-gray-100 rounded-lg hover:bg-gray-200" data-profile="${answer.profile}">
+                                ${answer.text}
+                            </button>
+                        `).join('')}
+                    </div>`;
+                const optionButtons = questionEl.querySelectorAll('.option-btn');
+                optionButtons.forEach(button => {
+                    button.addEventListener('click', () => {
+                        optionButtons.forEach(btn => btn.classList.remove('selected'));
+                        button.classList.add('selected');
+                        userTestAnswers[index] = button.dataset.profile;
+                        document.getElementById('user-test-error').textContent = ''; 
+                    });
+                });
+                quizContainer.appendChild(questionEl);
+            });
+        }
+        
+        async function submitUserTest() {
+            const nomeInput = document.getElementById('nome');
+            const idadeInput = document.getElementById('idade');
+            const sexoInput = document.getElementById('sexo');
+            const celularInput = document.getElementById('celular');
+            const personalInfoError = document.getElementById('personal-info-error');
+            const userTestError = document.getElementById('user-test-error');
+
+            personalInfoError.textContent = '';
+            userTestError.textContent = '';
+
+            // Validar informações pessoais
+            if (!nomeInput.value.trim()) { personalInfoError.textContent = 'Nome é obrigatório.'; return; }
+            if (!idadeInput.value || idadeInput.value < 10 || idadeInput.value > 99) { personalInfoError.textContent = 'Idade válida (10-99) é obrigatória.'; return; }
+            if (!sexoInput.value) { personalInfoError.textContent = 'Sexo é obrigatório.'; return; }
+
+            // Validar respostas do quiz
+            if (Object.keys(userTestAnswers).length < quizData.length) {
+                userTestError.textContent = 'Por favor, responda todas as perguntas do teste.';
+                return;
+            }
+
+            // Calcular perfil resultante
+            const scores = { exatas: 0, humanas: 0, biologicas: 0, artes: 0 };
+            for (const key in userTestAnswers) { scores[userTestAnswers[key]]++; }
+            const maxScore = Math.max(...Object.values(scores));
+            const bestProfiles = Object.keys(scores).filter(key => scores[key] === maxScore);
+            const answeredProfile = bestProfiles.length === 1 ? bestProfiles[0] : bestProfiles; // Salva como array se misto
+
+            const submissionData = {
+                nome: nomeInput.value.trim(),
+                idade: parseInt(idadeInput.value, 10),
+                sexo: sexoInput.value,
+                celular: celularInput.value.trim() || null,
+                answeredProfile: answeredProfile,
+                userAnswers: userTestAnswers, // Salva as respostas individuais também
+                timestamp: serverTimestamp()
+            };
+
+            const submitTestButton = document.getElementById('submitUserTestButton');
+            submitTestButton.disabled = true;
+            submitTestButton.textContent = 'Enviando...';
+
+            try {
+                // Autenticar usuário para escrita (anônimo ou com token)
+                const user = await authenticateUser(); // Garante que há um usuário
+                if (!user) {
+                    throw new Error("Falha na autenticação antes de salvar os dados.");
+                }
+
+                const submissionsColPath = `artifacts/${appId}/vocationalTestSubmissions`;
+                await addDoc(collection(db, submissionsColPath), submissionData);
+                console.log("Dados do teste salvos com sucesso!", submissionData);
+                
+                userTestSection.classList.add('hidden');
+                thankYouSection.classList.remove('hidden');
+                mainHeader.querySelector('h1').textContent = "Obrigado por Participar!";
+                adminToggleButton.classList.add('hidden'); // Esconde botão admin após teste
+            } catch (error) {
+                console.error("Erro ao salvar dados do teste: ", error);
+                userTestError.textContent = `Erro ao enviar seus dados: ${error.message}. Tente novamente.`;
+            } finally {
+                submitTestButton.disabled = false;
+                submitTestButton.textContent = 'Finalizar e Ver Meu Perfil (Salvar)';
+            }
+        }
+
+        // --- FUNÇÕES DO PAINEL ADMIN ---
+        // createOverallProfileChart, createProfilesByAgeChart (adaptadas para admin)
+        // authenticateUser (reutilizada)
+        // loadAndDisplayData (renomeada para loadAdminReportData)
+        // getSampleData (reutilizada)
+        // applyFiltersAndDisplay (renomeada para applyAdminFiltersAndDisplay)
+        // callGeminiAPI, generateGeminiInsights, generateContentSuggestions (reutilizadas)
+
+        function createAdminOverallProfileChart(data) {
+            const ctx = document.getElementById('overallProfileChart').getContext('2d');
+            const profileCounts = { exatas: 0, humanas: 0, biologicas: 0, artes: 0, total: 0 };
+            data.forEach(submission => {
+                profileCounts.total++; // Total de submissões processadas
+                if (submission.answeredProfile) {
+                    if (Array.isArray(submission.answeredProfile)) {
+                        submission.answeredProfile.forEach(profile => {
+                            if (profileCounts.hasOwnProperty(profile)) profileCounts[profile]++;
+                        });
+                    } else {
+                         if (profileCounts.hasOwnProperty(submission.answeredProfile)) profileCounts[submission.answeredProfile]++;
+                    }
+                }
+            });
+
+            if (overallProfileChart) overallProfileChart.destroy(); // Destroi gráfico anterior
+            overallProfileChart = new Chart(ctx, { /* ... config do gráfico ... */ }); // Recria
+            return profileCounts;
+        }
+
+        function createAdminProfilesByAgeChart(data) {
+            const ctx = document.getElementById('profilesByAgeChart').getContext('2d');
+            const ageGroups = { /* ... estrutura ... */ };
+            // ... (lógica de contagem por idade igual à original do admin) ...
+            if (profilesByAgeChart) profilesByAgeChart.destroy();
+            profilesByAgeChart = new Chart(ctx, { /* ... config do gráfico ... */ });
+            return ageGroups;
+        }
+
+        async function loadAdminReportData() {
+            const loadingIndicator = document.getElementById('admin-loading-indicator');
+            const chartsContainer = document.getElementById('charts-container');
+            const noDataMessage = document.getElementById('admin-no-data-message');
+            const geminiSections = [document.getElementById('gemini-analysis-section'), document.getElementById('gemini-content-suggestion-section')];
+            
+            loadingIndicator.classList.remove('hidden');
+            chartsContainer.classList.add('hidden');
+            noDataMessage.classList.add('hidden');
+            geminiSections.forEach(s => s.classList.add('hidden'));
+
+            try {
+                const user = await authenticateUser();
+                if (!user) { throw new Error("Autenticação necessária para admin."); }
+
+                const submissionsColPath = `artifacts/${appId}/vocationalTestSubmissions`;
+                const snapshot = await getDocs(collection(db, submissionsColPath));
+                allSubmissions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+                if (allSubmissions.length === 0) { 
+                    noDataMessage.textContent = "Nenhum dado real encontrado. Exibindo dados de exemplo para demonstração.";
+                    noDataMessage.classList.remove('hidden');
+                    allSubmissions = getSampleData(); // Usar dados de exemplo
+                }
+                applyAdminFiltersAndDisplay();
+            } catch (error) { /* ... tratamento de erro ... */ }
+            finally { /* ... lógica do finally ... */ }
+        }
+
+        function applyAdminFiltersAndDisplay() {
+            // ... (lógica de filtros igual à original do admin) ...
+            // Chamar createAdminOverallProfileChart e createAdminProfilesByAgeChart
+            // Atualizar currentAggregatedDataForGemini
+            // Mostrar/esconder #admin-no-data-message e #charts-container
+        }
+        
+        // ... (Funções Gemini: callGeminiAPI, generateGeminiInsights, generateContentSuggestions - podem ser reutilizadas) ...
+
+
+        // --- CONTROLE DE VISUALIZAÇÃO (Admin vs Usuário) ---
+        function toggleAdminView() {
+            const password = prompt("Digite a senha de administrador:", "");
+            if (password === ADMIN_PASSWORD) {
+                isAdminView = true;
+                userTestSection.classList.add('hidden');
+                thankYouSection.classList.add('hidden');
+                adminReportSection.classList.remove('hidden');
+                mainHeader.querySelector('h1').textContent = "Painel Administrativo Vocacional";
+                adminToggleButton.textContent = "Sair do Modo Admin";
+                loadAdminReportData(); // Carrega dados para o admin
+            } else if (password !== null) { // Se não cancelou o prompt
+                alert("Senha incorreta!");
+            }
+        }
+
+        function switchToUserView() {
+            isAdminView = false;
+            userTestSection.classList.remove('hidden');
+            adminReportSection.classList.add('hidden');
+            thankYouSection.classList.add('hidden');
+            mainHeader.querySelector('h1').textContent = "Teste Vocacional Interativo";
+            adminToggleButton.textContent = "Acesso Admin";
+            loadUserQuiz(); // Carrega o quiz para o usuário
+        }
+
+        // --- INICIALIZAÇÃO ---
+        document.addEventListener('DOMContentLoaded', () => {
+            // Configuração inicial de visibilidade
+            adminReportSection.classList.add('hidden');
+            thankYouSection.classList.add('hidden');
+            userTestSection.classList.remove('hidden'); // Começa na tela do teste
+            loadUserQuiz(); // Carrega as perguntas do teste
+
+            // Event Listeners do Teste do Usuário
+            document.getElementById('submitUserTestButton').addEventListener('click', submitUserTest);
+
+            // Event Listeners do Painel Admin (só funcionam se a seção estiver visível)
+            document.getElementById('filterButton').addEventListener('click', applyAdminFiltersAndDisplay);
+            document.getElementById('resetFiltersButton').addEventListener('click', () => {
+                document.getElementById('minAge').value = '';
+                document.getElementById('maxAge').value = '';
+                document.getElementById('profileFilter').value = '';
+                applyAdminFiltersAndDisplay();
+            });
+            document.getElementById('generateInsightsButton').addEventListener('click', generateGeminiInsights); // Reutiliza função
+            document.getElementById('generateContentSuggestionButton').addEventListener('click', generateContentSuggestions); // Reutiliza função
+            
+            adminToggleButton.addEventListener('click', () => {
+                if (isAdminView) {
+                    switchToUserView();
+                } else {
+                    toggleAdminView();
+                }
+            });
+            document.getElementById('currentYear').textContent = new Date().getFullYear();
+
+            // Funções Gemini (reutilizadas - o código delas não muda)
+            window.callGeminiAPI = async function(prompt, resultDivId, loadingDivId, sectionDivId, buttonId) { /* ... código completo ... */ };
+            window.generateGeminiInsights = async function() { /* ... código completo ... */ };
+            window.generateContentSuggestions = async function() { /* ... código completo ... */ };
+
+            // Adaptação das funções de gráfico para o contexto de admin
+            // (o código delas é extenso, então estou apenas mostrando a estrutura de adaptação)
+             window.createAdminOverallProfileChart = function(data) {
+                const ctx = document.getElementById('overallProfileChart').getContext('2d');
+                const profileCounts = { exatas: 0, humanas: 0, biologicas: 0, artes: 0, total: 0 };
+                data.forEach(submission => {
+                    profileCounts.total++;
+                    if (submission.answeredProfile) {
+                        if (Array.isArray(submission.answeredProfile)) {
+                            submission.answeredProfile.forEach(profile => { if (profileCounts.hasOwnProperty(profile)) profileCounts[profile]++; });
+                        } else {
+                            if (profileCounts.hasOwnProperty(submission.answeredProfile)) profileCounts[submission.answeredProfile]++;
+                        }
+                    }
+                });
+                if (window.overallProfileChart instanceof Chart) window.overallProfileChart.destroy();
+                window.overallProfileChart = new Chart(ctx, {
+                    type: 'pie', data: { labels: ['Exatas', 'Humanas', 'Biológicas', 'Artes'], datasets: [{ label: 'Distribuição', data: [profileCounts.exatas, profileCounts.humanas, profileCounts.biologicas, profileCounts.artes], backgroundColor: ['#3B82F6', '#10B981', '#F59E0B', '#EC4899'], borderColor: '#FFFFFF', borderWidth: 2 }] },
+                    options: { responsive: true, maintainAspectRatio: false, plugins: { title: { display: true, text: 'Distribuição Geral (Admin)', font: { size: 18 }, padding: 10 }, legend: { position: 'bottom' } } }
+                });
+                return profileCounts;
+            };
+            window.createAdminProfilesByAgeChart = function(data) {
+                const ctx = document.getElementById('profilesByAgeChart').getContext('2d');
+                const ageGroups = { '15-17': { exatas: 0, humanas: 0, biologicas: 0, artes: 0, totalRespondents: 0 }, '18-20': { exatas: 0, humanas: 0, biologicas: 0, artes: 0, totalRespondents: 0 }, '21-22+': { exatas: 0, humanas: 0, biologicas: 0, artes: 0, totalRespondents: 0 } };
+                const uniqueRespondentsByAge = { '15-17': new Set(), '18-20': new Set(), '21-22+': new Set() };
+                 data.forEach(submission => {
+                    let ageGroupKey; const age = parseInt(submission.idade, 10);
+                    if (age >= 15 && age <= 17) ageGroupKey = '15-17'; else if (age >= 18 && age <= 20) ageGroupKey = '18-20'; else if (age >= 21) ageGroupKey = '21-22+';
+                    if (ageGroupKey) {
+                        uniqueRespondentsByAge[ageGroupKey].add(submission.id);
+                        if (submission.answeredProfile) {
+                            if (Array.isArray(submission.answeredProfile)) { submission.answeredProfile.forEach(p => { if(ageGroups[ageGroupKey].hasOwnProperty(p)) ageGroups[ageGroupKey][p]++; });
+                            } else { if(ageGroups[ageGroupKey].hasOwnProperty(submission.answeredProfile)) ageGroups[ageGroupKey][submission.answeredProfile]++; }
+                        }
+                    }
+                });
+                Object.keys(uniqueRespondentsByAge).forEach(key => { ageGroups[key].totalRespondents = uniqueRespondentsByAge[key].size; });
+                if (window.profilesByAgeChart instanceof Chart) window.profilesByAgeChart.destroy();
+                window.profilesByAgeChart = new Chart(ctx, {
+                    type: 'bar', data: { labels: ['15-17', '18-20', '21-22+'], datasets: [ { label: 'Exatas', data: [ageGroups['15-17'].exatas, ageGroups['18-20'].exatas, ageGroups['21-22+'].exatas], backgroundColor: '#3B82F6' }, { label: 'Humanas', data: [ageGroups['15-17'].humanas, ageGroups['18-20'].humanas, ageGroups['21-22+'].humanas], backgroundColor: '#10B981' }, { label: 'Biológicas', data: [ageGroups['15-17'].biologicas, ageGroups['18-20'].biologicas, ageGroups['21-22+'].biologicas], backgroundColor: '#F59E0B' }, { label: 'Artes', data: [ageGroups['15-17'].artes, ageGroups['18-20'].artes, ageGroups['21-22+'].artes], backgroundColor: '#EC4899' }] },
+                    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } }, plugins: { title: { display: true, text: 'Perfis por Idade (Admin)', font: { size: 18 }, padding: 10 }, legend: { position: 'top' } } }
+                });
+                return ageGroups;
+            };
+            window.applyAdminFiltersAndDisplay = function() {
+                const minAge = parseInt(document.getElementById('minAge').value, 10) || 0;
+                const maxAge = parseInt(document.getElementById('maxAge').value, 10) || 100;
+                const selectedProfileFilter = document.getElementById('profileFilter').value;
+                const noDataMsgEl = document.getElementById('admin-no-data-message');
+                const chartsEl = document.getElementById('charts-container');
+                [document.getElementById('gemini-analysis-section'), document.getElementById('gemini-content-suggestion-section')].forEach(s => s.classList.add('hidden'));
+
+                const filteredData = allSubmissions.filter(s => {
+                    const age = parseInt(s.idade, 10);
+                    const ma = age >= minAge && age <= maxAge;
+                    let mp = true;
+                    if (selectedProfileFilter) { mp = Array.isArray(s.answeredProfile) ? s.answeredProfile.includes(selectedProfileFilter) : s.answeredProfile === selectedProfileFilter; }
+                    return ma && mp;
+                });
+                const overall = createAdminOverallProfileChart(filteredData); // Usa a função admin
+                const byAge = createAdminProfilesByAgeChart(filteredData);   // Usa a função admin
+                currentAggregatedDataForGemini = { overall, byAge, totalRespondentsOverall: overall.total };
+                if (filteredData.length === 0) { noDataMsgEl.textContent = allSubmissions.length > 0 ? "Nenhum resultado para os filtros." : "Nenhum dado para exibir."; noDataMsgEl.classList.remove('hidden'); chartsEl.classList.add('hidden'); } 
+                else { noDataMsgEl.classList.add('hidden'); chartsEl.classList.remove('hidden'); }
+            };
+             window.loadAdminReportData = async function() {
+                const loadingIndicator = document.getElementById('admin-loading-indicator');
+                const chartsContainer = document.getElementById('charts-container');
+                const noDataMessage = document.getElementById('admin-no-data-message');
+                loadingIndicator.classList.remove('hidden'); chartsContainer.classList.add('hidden'); noDataMessage.classList.add('hidden');
+                try {
+                    const user = await authenticateUser(); if (!user) throw new Error("Autenticação admin falhou.");
+                    const snapshot = await getDocs(collection(db, `artifacts/${appId}/vocationalTestSubmissions`));
+                    allSubmissions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    if (allSubmissions.length === 0) { noDataMessage.textContent = "Nenhum dado real. Exibindo exemplos."; noDataMessage.classList.remove('hidden'); allSubmissions = getSampleData(); }
+                    applyAdminFiltersAndDisplay();
+                } catch (error) { console.error("Erro loadAdminReportData:", error); noDataMessage.innerHTML = `Erro ao carregar dados do admin: ${error.message}<br>Exibindo exemplos.`; noDataMessage.classList.remove('hidden'); allSubmissions = getSampleData(); applyAdminFiltersAndDisplay(); } 
+                finally { loadingIndicator.classList.add('hidden'); if(allSubmissions.length > 0) chartsContainer.classList.remove('hidden');}
+            };
+        });
+    </script>
+</head>
+<body>
+    <header id="main-header" class="bg-gradient-to-r from-slate-900 to-slate-800 text-white py-4 shadow-xl sticky top-0 z-50">
+        <div class="container mx-auto px-6 flex justify-between items-center">
+            <h1 class="text-2xl sm:text-3xl font-bold tracking-tight">Teste Vocacional Interativo</h1>
+            <button id="adminToggleButton" class="btn-admin-toggle">Acesso Admin</button>
+        </div>
+    </header>
+
+    <main class="container mx-auto p-4 sm:p-6 md:p-8 mt-4">
+        <!-- Seção do Teste para o Usuário -->
+        <section id="user-test-section">
+            <div class="section-card mb-8" id="personal-info-section-card">
+                <h2 class="text-xl font-semibold text-gray-800 mb-6 text-center">Informações Pessoais</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+                    <div><label for="nome" class="personal-info-label">Nome Completo:</label><input type="text" id="nome" class="personal-info-field"></div>
+                    <div><label for="idade" class="personal-info-label">Idade:</label><input type="number" id="idade" class="personal-info-field" min="10" max="99"></div>
+                    <div><label for="sexo" class="personal-info-label">Sexo:</label><select id="sexo" class="personal-info-field"><option value="" disabled selected>Selecione...</option><option value="masculino">Masculino</option><option value="feminino">Feminino</option><option value="outro">Outro</option><option value="nao-informar">Prefiro não informar</option></select></div>
+                    <div><label for="celular" class="personal-info-label">Celular (opcional):</label><input type="tel" id="celular" placeholder="(XX) XXXXX-XXXX" class="personal-info-field"></div>
+                </div>
+                <div id="personal-info-error" class="error-message mt-4 text-center"></div>
+            </div>
+            <div id="quiz-container" class="space-y-0">
+                <!-- Perguntas do quiz são carregadas aqui -->
+            </div>
+            <div id="user-test-error" class="error-message text-center mt-4"></div>
+            <div class="text-center mt-8 mb-8">
+                <button id="submitUserTestButton" class="btn-primary text-lg px-10 py-3">Finalizar e Ver Meu Perfil (Salvar)</button>
+            </div>
+        </section>
+
+        <!-- Seção de Agradecimento ao Usuário -->
+        <section id="thank-you-section" class="hidden text-center section-card py-12">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-20 w-20 text-green-500 mx-auto mb-4" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+            </svg>
+            <h2 class="text-3xl font-bold text-gray-800 mb-3">Obrigado por participar!</h2>
+            <p class="text-lg text-gray-600">Suas respostas foram enviadas com sucesso.</p>
+            <button onclick="window.location.reload()" class="btn-secondary mt-8">Fazer o teste novamente</button>
+        </section>
+
+        <!-- Seção do Painel Admin (inicialmente oculta) -->
+        <section id="admin-report-section" class="hidden">
+            <div class="section-card filter-section mb-8">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-6 text-center">Filtrar Resultados e Ações IA</h2>
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-x-6 gap-y-4 items-end">
+                    <div><label for="minAge">Idade Mínima:</label><input type="number" id="minAge" placeholder="Ex: 15" min="10"></div>
+                    <div><label for="maxAge">Idade Máxima:</label><input type="number" id="maxAge" placeholder="Ex: 22" min="10"></div>
+                    <div><label for="profileFilter">Perfil:</label><select id="profileFilter"><option value="">Todos</option><option value="exatas">Exatas</option><option value="humanas">Humanas</option><option value="biologicas">Biológicas</option><option value="artes">Artes</option></select></div>
+                    <div class="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3 xl:col-span-2 items-center w-full">
+                        <button id="filterButton" class="btn-primary w-full sm:w-auto">Aplicar</button>
+                        <button id="resetFiltersButton" class="btn-secondary w-full sm:w-auto">Limpar</button>
+                    </div>
+                </div>
+                <div class="mt-6 flex flex-col sm:flex-row sm:justify-center sm:space-x-4 space-y-3 sm:space-y-0">
+                    <button id="generateInsightsButton" class="btn-gemini w-full sm:w-auto">✨ Gerar Análise Dados</button>
+                    <button id="generateContentSuggestionButton" class="btn-gemini w-full sm:w-auto">✨ Sugerir Conteúdo IA</button>
+                </div>
+            </div>
+
+            <div id="admin-loading-indicator" class="text-center py-10 hidden"> <!-- Indicador de loading do admin -->
+                <svg class="animate-spin h-10 w-10 text-blue-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                <p class="mt-3 text-lg font-medium text-gray-600">Carregando dados do relatório...</p>
+            </div>
+            <div id="admin-no-data-message" class="text-center py-10 section-card hidden"> <!-- Mensagem de sem dados do admin -->
+                 <p class="mt-4 text-xl font-semibold text-gray-700">Oops! Nenhum dado para exibir no relatório.</p>
+            </div>
+            <div id="charts-container" class="grid grid-cols-1 lg:grid-cols-2 gap-8 hidden">
+                <div class="chart-container"><canvas id="overallProfileChart"></canvas></div>
+                <div class="chart-container"><canvas id="profilesByAgeChart"></canvas></div>
+            </div>
+            <section id="gemini-analysis-section" class="section-card gemini-section mt-8 hidden">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4 text-center">Análise IA dos Dados ✨</h2>
+                <div id="gemini-loading" class="text-center py-5 hidden"><p>Gerando insights...</p></div>
+                <div id="gemini-analysis-content" class="prose max-w-none text-gray-700"></div>
+            </section>
+            <section id="gemini-content-suggestion-section" class="section-card gemini-section mt-8 hidden">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4 text-center">Sugestões IA de Conteúdo ✨</h2>
+                <div id="gemini-content-loading" class="text-center py-5 hidden"><p>Gerando sugestões...</p></div>
+                <div id="gemini-content-suggestion-content" class="prose max-w-none text-gray-700"></div>
+            </section>
+            <div class="mt-10 p-6 section-card text-sm text-gray-600">
+                <!-- Observações Importantes (já existentes no painel admin) -->
+            </div>
+        </section>
+    </main>
+
+    <footer class="text-center py-8 mt-12 border-t border-gray-200">
+        <p class="text-gray-500">&copy; <span id="currentYear"></span> Plataforma Vocacional. Todos os direitos reservados.</p>
+    </footer>
+</body>
+</html>
