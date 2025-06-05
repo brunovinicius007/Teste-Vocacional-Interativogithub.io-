@@ -50,7 +50,7 @@
             } 
             catch (e) { console.error("Erro parse __firebase_config:", e); }
         } else {
-            console.log("Config do Canvas não encontrada ou vazia, usando config padrão. PREENCHA OS PLACEHOLDERS se for rodar fora do Canvas.");
+            console.warn("Config do Canvas não encontrada ou vazia, usando config padrão. PREENCHA OS PLACEHOLDERS da firebaseConfigDefault se for rodar fora do Canvas.");
         }
         
         const app = initializeApp(effectiveFirebaseConfig);
@@ -67,10 +67,8 @@
         let currentAggregatedDataForGemini = {};
         let userTestAnswers = {}; 
 
-        // Obtendo elementos do DOM uma vez para evitar múltiplas chamadas
         let mainHeader, userTestSection, adminReportSection, thankYouSection, adminToggleButton, quizContainer;
         
-        // --- DADOS DO QUIZ (Teste Vocacional) ---
         const quizData = [
             {
                 question: "No seu tempo livre, o que você mais gosta de fazer?",
@@ -146,53 +144,62 @@
             }
         ];
 
-        // --- FUNÇÕES DE AUTENTICAÇÃO (Firebase) ---
         async function authenticateUser() {
-            return new Promise((resolve) => {
-                const unsubscribe = onAuthStateChanged(auth, async (user) => {
-                    unsubscribe(); 
-                    if (user) {
-                        console.log("Usuário já autenticado:", user.uid, "Anônimo:", user.isAnonymous);
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token && user.isAnonymous) {
-                            console.log("Tentando atualizar para Custom Token com __initial_auth_token.");
-                            try {
-                                await signInWithCustomToken(auth, __initial_auth_token);
-                                console.log("Sucesso ao autenticar com Custom Token. UID:", auth.currentUser.uid);
-                            } catch (customTokenError) {
-                                console.error("Erro ao autenticar com Custom Token (mantendo anônimo):", customTokenError);
-                            }
-                        }
-                    } else if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                        console.log("Nenhum usuário. Tentando autenticar com __initial_auth_token.");
+            return new Promise(async (resolve) => {
+                const currentUser = auth.currentUser;
+
+                if (currentUser) {
+                    console.log("authenticateUser: Usuário já autenticado (verificação inicial):", currentUser.uid, "Anônimo:", currentUser.isAnonymous);
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token && currentUser.isAnonymous) {
+                        console.log("authenticateUser: Tentando atualizar para Custom Token.");
                         try {
                             await signInWithCustomToken(auth, __initial_auth_token);
-                            console.log("Sucesso ao autenticar com Custom Token. UID:", auth.currentUser.uid);
+                            console.log("authenticateUser: Sucesso com Custom Token. UID:", auth.currentUser.uid);
+                            resolve(auth.currentUser);
                         } catch (customTokenError) {
-                            console.error("Erro ao autenticar com Custom Token, tentando anônimo:", customTokenError);
-                            try {
-                                await signInAnonymously(auth);
-                                console.log("Autenticado anonimamente após falha no Custom Token. UID:", auth.currentUser.uid);
-                            } catch (anonError) {
-                                console.error("Erro ao autenticar anonimamente:", anonError);
-                            }
+                            console.error("authenticateUser: Erro com Custom Token (mantendo anônimo):", customTokenError);
+                            resolve(currentUser); // Resolve com o usuário anônimo existente
                         }
                     } else {
-                        console.log("Nenhum usuário e __initial_auth_token não definido. Tentando autenticação anônima.");
+                        resolve(currentUser); // Já autenticado adequadamente
+                    }
+                    return;
+                }
+
+                // Nenhum usuário logado, tentar login
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    console.log("authenticateUser: Nenhum usuário inicial. Tentando com __initial_auth_token.");
+                    try {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                        console.log("authenticateUser: Sucesso com Custom Token. UID:", auth.currentUser.uid);
+                        resolve(auth.currentUser);
+                    } catch (customTokenError) {
+                        console.error("authenticateUser: Erro com Custom Token, tentando anônimo:", customTokenError);
                         try {
                             await signInAnonymously(auth);
-                            console.log("Autenticado anonimamente. UID:", auth.currentUser.uid);
+                            console.log("authenticateUser: Autenticado anonimamente após falha no Custom Token. UID:", auth.currentUser.uid);
+                            resolve(auth.currentUser);
                         } catch (anonError) {
-                            console.error("Erro ao autenticar anonimamente:", anonError);
+                            console.error("authenticateUser: Erro ao autenticar anonimamente (após falha custom token):", anonError);
+                            resolve(null);
                         }
                     }
-                    resolve(auth.currentUser);
-                });
+                } else {
+                    console.log("authenticateUser: Nenhum usuário inicial e __initial_auth_token não definido. Tentando anônimo.");
+                    try {
+                        await signInAnonymously(auth);
+                        console.log("authenticateUser: Autenticado anonimamente. UID:", auth.currentUser.uid);
+                        resolve(auth.currentUser);
+                    } catch (anonError) {
+                        console.error("authenticateUser: Erro ao autenticar anonimamente:", anonError);
+                        resolve(null);
+                    }
+                }
             });
         }
 
-        // --- FUNÇÕES DO TESTE DO USUÁRIO ---
         function loadUserQuiz() {
-            if (!quizContainer) return; // Garante que o elemento existe
+            if (!quizContainer) return;
             quizContainer.innerHTML = ''; 
             userTestAnswers = {}; 
             quizData.forEach((item, index) => {
@@ -228,7 +235,10 @@
             const personalInfoError = document.getElementById('personal-info-error');
             const userTestError = document.getElementById('user-test-error');
 
-            if (!personalInfoError || !userTestError || !nomeInput || !idadeInput || !sexoInput || !celularInput) return;
+            if (!personalInfoError || !userTestError || !nomeInput || !idadeInput || !sexoInput || !celularInput) {
+                console.error("Elementos do DOM para o teste do usuário não encontrados.");
+                return;
+            }
 
             personalInfoError.textContent = '';
             userTestError.textContent = '';
@@ -265,10 +275,14 @@
             }
 
             try {
+                console.log("submitUserTest: Tentando autenticar usuário...");
                 const user = await authenticateUser(); 
                 if (!user) {
+                    console.error("submitUserTest: Falha na autenticação antes de salvar. Usuário nulo.");
                     throw new Error("Falha na autenticação antes de salvar os dados.");
                 }
+                console.log("submitUserTest: Usuário autenticado:", user.uid, "Prosseguindo para salvar.");
+
                 const submissionsColPath = `artifacts/${appId}/vocationalTestSubmissions`;
                 await addDoc(collection(db, submissionsColPath), submissionData);
                 console.log("Dados do teste salvos com sucesso!", submissionData);
@@ -288,7 +302,6 @@
             }
         }
 
-        // --- FUNÇÕES DO PAINEL ADMIN (GRÁFICOS E FILTROS) ---
         function createAdminOverallProfileChart(data) {
             const ctx = document.getElementById('overallProfileChart')?.getContext('2d');
             if (!ctx) return null;
@@ -320,7 +333,7 @@
                 let ageGroupKey; const age = parseInt(submission.idade, 10);
                 if (age >= 15 && age <= 17) ageGroupKey = '15-17'; else if (age >= 18 && age <= 20) ageGroupKey = '18-20'; else if (age >= 21) ageGroupKey = '21-22+';
                 if (ageGroupKey) {
-                    uniqueRespondentsByAge[ageGroupKey].add(submission.id); // Usar um ID único da submissão
+                    uniqueRespondentsByAge[ageGroupKey].add(submission.id); 
                     if (submission.answeredProfile) {
                         if (Array.isArray(submission.answeredProfile)) { submission.answeredProfile.forEach(p => { if(ageGroups[ageGroupKey].hasOwnProperty(p)) ageGroups[ageGroupKey][p]++; });
                         } else { if(ageGroups[ageGroupKey].hasOwnProperty(submission.answeredProfile)) ageGroups[ageGroupKey][submission.answeredProfile]++; }
@@ -341,6 +354,8 @@
                 { id: 's1', nome: 'Ana Silva', idade: 16, sexo: 'feminino', answeredProfile: 'humanas', timestamp: new Date() },
                 { id: 's2', nome: 'Bruno Costa', idade: 17, sexo: 'masculino', answeredProfile: 'exatas', timestamp: new Date() },
                 { id: 's3', nome: 'Carla Dias', idade: 21, sexo: 'feminino', answeredProfile: 'artes', timestamp: new Date() },
+                 { id: 's4', nome: 'Daniel Fox', idade: 19, sexo: 'masculino', answeredProfile: 'biologicas', timestamp: new Date() },
+                { id: 's5', nome: 'Elena Moon', idade: 15, sexo: 'feminino', answeredProfile: ['humanas', 'artes'], timestamp: new Date() }
             ];
         }
 
@@ -350,7 +365,10 @@
             const noDataMessage = document.getElementById('admin-no-data-message');
             const geminiSections = [document.getElementById('gemini-analysis-section'), document.getElementById('gemini-content-suggestion-section')];
             
-            if(!loadingIndicator || !chartsContainer || !noDataMessage) return;
+            if(!loadingIndicator || !chartsContainer || !noDataMessage) {
+                console.error("Elementos do DOM para relatório admin não encontrados.");
+                return;
+            }
 
             loadingIndicator.classList.remove('hidden'); 
             chartsContainer.classList.add('hidden'); 
@@ -359,27 +377,32 @@
 
             try {
                 const user = await authenticateUser(); 
-                if (!user) { throw new Error("Autenticação necessária para admin."); }
+                if (!user) { 
+                    console.error("loadAdminReportData: Falha na autenticação do admin.");
+                    throw new Error("Autenticação necessária para visualizar o painel de administrador."); 
+                }
+                console.log("loadAdminReportData: Admin autenticado:", user.uid);
 
                 const submissionsColPath = `artifacts/${appId}/vocationalTestSubmissions`;
                 const snapshot = await getDocs(collection(db, submissionsColPath));
                 allSubmissions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                console.log(`loadAdminReportData: ${allSubmissions.length} submissões carregadas.`);
 
                 if (allSubmissions.length === 0) { 
-                    noDataMessage.textContent = "Nenhum dado real encontrado. Exibindo dados de exemplo.";
+                    noDataMessage.textContent = "Nenhum dado real encontrado no Firestore. Exibindo dados de exemplo para demonstração.";
                     noDataMessage.classList.remove('hidden');
                     allSubmissions = getSampleData(); 
                 }
                 applyAdminFiltersAndDisplay();
             } catch (error) { 
-                console.error("Erro loadAdminReportData:", error); 
-                noDataMessage.innerHTML = `Erro ao carregar dados do admin: ${error.message}<br>Exibindo exemplos.`; 
+                console.error("Erro em loadAdminReportData:", error); 
+                noDataMessage.innerHTML = `Erro ao carregar dados do relatório: ${error.message}<br>Verifique as regras de segurança do Firestore e a configuração. Exibindo dados de exemplo.`; 
                 noDataMessage.classList.remove('hidden'); 
                 allSubmissions = getSampleData(); 
                 applyAdminFiltersAndDisplay(); 
             } finally { 
                 loadingIndicator.classList.add('hidden'); 
-                if(allSubmissions.length > 0) chartsContainer.classList.remove('hidden');
+                if(allSubmissions.length > 0 && chartsContainer) chartsContainer.classList.remove('hidden');
             }
         }
 
@@ -390,7 +413,10 @@
             const noDataMsgEl = document.getElementById('admin-no-data-message');
             const chartsEl = document.getElementById('charts-container');
 
-            if(!minAgeEl || !maxAgeEl || !profileFilterEl || !noDataMsgEl || !chartsEl) return;
+            if(!minAgeEl || !maxAgeEl || !profileFilterEl || !noDataMsgEl || !chartsEl) {
+                console.error("Elementos DOM para filtros admin não encontrados.");
+                return;
+            }
 
             const minAge = parseInt(minAgeEl.value, 10) || 0;
             const maxAge = parseInt(maxAgeEl.value, 10) || 100;
@@ -411,7 +437,7 @@
             currentAggregatedDataForGemini = { overall, byAge, totalRespondentsOverall: overall?.total || 0 };
             
             if (filteredData.length === 0) { 
-                noDataMsgEl.textContent = allSubmissions.length > 0 ? "Nenhum resultado para os filtros." : "Nenhum dado para exibir."; 
+                noDataMsgEl.textContent = allSubmissions.length > 0 ? "Nenhum resultado encontrado para os filtros aplicados." : "Nenhum dado para exibir no relatório."; 
                 noDataMsgEl.classList.remove('hidden'); 
                 chartsEl.classList.add('hidden'); 
             } else { 
@@ -420,14 +446,16 @@
             }
         }
         
-        // --- FUNÇÕES DA API GEMINI ---
         async function callGeminiAPI(prompt, resultDivId, loadingDivId, sectionDivId, buttonId) {
             const button = document.getElementById(buttonId);
             const resultDiv = document.getElementById(resultDivId);
             const loadingDiv = document.getElementById(loadingDivId);
             const sectionDiv = document.getElementById(sectionDivId);
 
-            if(!button || !resultDiv || !loadingDiv || !sectionDiv) return;
+            if(!button || !resultDiv || !loadingDiv || !sectionDiv) {
+                console.error("Elementos DOM para Gemini não encontrados:", resultDivId);
+                return;
+            }
 
             button.disabled = true;
             resultDiv.innerHTML = '';
@@ -465,7 +493,7 @@
                 }
             } catch (error) {
                 console.error("Erro ao chamar API Gemini:", error);
-                resultDiv.innerHTML = `<p class="text-red-600">Erro: ${error.message}.</p>`;
+                resultDiv.innerHTML = `<p class="text-red-600">Erro ao gerar conteúdo com IA: ${error.message}.</p>`;
             } finally {
                 loadingDiv.classList.add('hidden');
                 button.disabled = false;
@@ -479,17 +507,28 @@
 
             if(!analysisContentEl || !analysisSectionEl) return;
 
-            if (!overall || !byAge || totalRespondentsOverall === 0) {
-                analysisContentEl.innerHTML = '<p class="text-gray-600">Dados insuficientes para análise.</p>';
+            if (!overall || !byAge || !totalRespondentsOverall || totalRespondentsOverall === 0) {
+                analysisContentEl.innerHTML = '<p class="text-gray-600">Dados insuficientes para gerar uma análise. Verifique os filtros ou se há dados carregados.</p>';
                 analysisSectionEl.classList.remove('hidden');
                 return;
             }
-            const prompt = `Você é um analista de dados educacionais. Analise os dados de um teste vocacional e forneça insights, tendências e 2-3 sugestões de ações para uma instituição. Total de respondentes: ${totalRespondentsOverall}.
-Dados Gerais: Exatas(${overall.exatas}), Humanas(${overall.humanas}), Biológicas(${overall.biologicas}), Artes(${overall.artes}).
-Por Idade (15-17): Exatas(${byAge['15-17']?.exatas || 0}), Humanas(${byAge['15-17']?.humanas || 0}), Bio(${byAge['15-17']?.biologicas || 0}), Artes(${byAge['15-17']?.artes || 0}). Total na faixa: ${byAge['15-17']?.totalRespondents || 0}.
-Por Idade (18-20): Exatas(${byAge['18-20']?.exatas || 0}), Humanas(${byAge['18-20']?.humanas || 0}), Bio(${byAge['18-20']?.biologicas || 0}), Artes(${byAge['18-20']?.artes || 0}). Total na faixa: ${byAge['18-20']?.totalRespondents || 0}.
-Por Idade (21-22+): Exatas(${byAge['21-22+']?.exatas || 0}), Humanas(${byAge['21-22+']?.humanas || 0}), Bio(${byAge['21-22+']?.biologicas || 0}), Artes(${byAge['21-22+']?.artes || 0}). Total na faixa: ${byAge['21-22+']?.totalRespondents || 0}.
-Análise: 1. Tendências. 2. Insights Notáveis. 3. Sugestões de Ações (2-3). Formato: bullet points.`;
+            const prompt = `Você é um analista de dados educacionais experiente. Analise os seguintes dados agregados de um teste vocacional e forneça insights concisos, tendências observadas e 2-3 sugestões de ações práticas que uma instituição de ensino poderia tomar. Seja direto e use bullet points para clareza.
+
+Dados Gerais de Perfis (total de respondentes para cada perfil de ${totalRespondentsOverall} participantes no total):
+- Exatas: ${overall.exatas}
+- Humanas: ${overall.humanas}
+- Biológicas: ${overall.biologicas}
+- Artes: ${overall.artes}
+
+Dados de Perfis por Faixa Etária (número de respondentes por perfil em cada faixa):
+- Faixa 15-17 anos (Total de ${byAge['15-17']?.totalRespondents || 0} respondentes): Exatas (${byAge['15-17']?.exatas || 0}), Humanas (${byAge['15-17']?.humanas || 0}), Biológicas (${byAge['15-17']?.biologicas || 0}), Artes (${byAge['15-17']?.artes || 0})
+- Faixa 18-20 anos (Total de ${byAge['18-20']?.totalRespondents || 0} respondentes): Exatas (${byAge['18-20']?.exatas || 0}), Humanas (${byAge['18-20']?.humanas || 0}), Biológicas (${byAge['18-20']?.biologicas || 0}), Artes (${byAge['18-20']?.artes || 0})
+- Faixa 21-22+ anos (Total de ${byAge['21-22+']?.totalRespondents || 0} respondentes): Exatas (${byAge['21-22+']?.exatas || 0}), Humanas (${byAge['21-22+']?.humanas || 0}), Biológicas (${byAge['21-22+']?.biologicas || 0}), Artes (${byAge['21-22+']?.artes || 0})
+
+Análise Solicitada:
+1. Principais Tendências Observadas (Ex: perfil mais popular geral, variações significativas por idade).
+2. Insights Surpreendentes ou Notáveis (se houver, considerando o contexto educacional).
+3. Sugestões de Ações Práticas para a instituição (2-3 sugestões claras e acionáveis).`;
             callGeminiAPI(prompt, 'gemini-analysis-content', 'gemini-loading', 'gemini-analysis-section', 'generateInsightsButton');
         }
 
@@ -500,35 +539,38 @@ Análise: 1. Tendências. 2. Insights Notáveis. 3. Sugestões de Ações (2-3).
 
             if (!suggestionContentEl || !suggestionSectionEl) return;
 
-             if (!overall || totalRespondentsOverall === 0) {
-                suggestionContentEl.innerHTML = '<p class="text-gray-600">Dados insuficientes para sugestões.</p>';
+             if (!overall || !totalRespondentsOverall || totalRespondentsOverall === 0) {
+                suggestionContentEl.innerHTML = '<p class="text-gray-600">Dados insuficientes para gerar sugestões de conteúdo. Verifique os filtros ou se há dados carregados.</p>';
                 suggestionSectionEl.classList.remove('hidden');
                 return;
             }
 
             const profilesSorted = Object.entries(overall)
-                .filter(([key]) => key !== 'total')
+                .filter(([key]) => key !== 'total' && typeof overall[key] === 'number') // Ensure it's a profile count
                 .sort(([,a],[,b]) => b-a);
             
-            const topProfile = profilesSorted.length > 0 ? profilesSorted[0][0] : "geral";
-            const secondProfile = profilesSorted.length > 1 ? profilesSorted[1][0] : null;
-
-            let focusProfiles = `o perfil de "${topProfile}"`;
-            if (secondProfile && profilesSorted[0][1] > 0) { 
-                focusProfiles += ` e secundariamente o perfil de "${secondProfile}"`;
-            } else if (profilesSorted[0] && profilesSorted[0][1] === 0) { 
-                 focusProfiles = "os perfis gerais dos estudantes";
+            let focusProfilesMessage = "os perfis gerais dos estudantes"; // Default message
+            if (profilesSorted.length > 0 && profilesSorted[0][1] > 0) { // Check if top profile has count > 0
+                const topProfile = profilesSorted[0][0];
+                focusProfilesMessage = `o perfil de "${topProfile}"`;
+                if (profilesSorted.length > 1 && profilesSorted[1][1] > 0) { // Check if second profile has count > 0
+                    const secondProfile = profilesSorted[1][0];
+                    focusProfilesMessage += ` e secundariamente o perfil de "${secondProfile}"`;
+                }
+            } else if (profilesSorted.length === 0 || profilesSorted[0][1] === 0) {
+                 // This case means no profiles have counts, or top profile has 0 count
+                 // The default "os perfis gerais dos estudantes" is appropriate
             }
 
-            const prompt = `Com base nos resultados de um teste vocacional onde o foco principal dos estudantes é ${focusProfiles}, sugira:
-1.  Dois temas para workshops ou palestras que seriam atraentes para esses perfis.
-2.  Dois tópicos para posts de blog ou redes sociais para engajar estudantes com esses interesses.
-3.  Uma possível melhoria ou funcionalidade adicional para um teste vocacional online, pensando nesses perfis.
-Seja criativo e prático. Use bullet points.`;
+
+            const prompt = `Com base nos resultados de um teste vocacional onde o foco principal dos estudantes parece ser ${focusProfilesMessage}, sugira de forma concisa e prática:
+1.  Dois temas criativos e atraentes para workshops ou palestras direcionados a esses perfis.
+2.  Dois tópicos interessantes para posts de blog ou redes sociais para engajar estudantes com esses interesses vocacionais.
+3.  Uma possível melhoria ou funcionalidade adicional para um teste vocacional online, pensando especificamente em como melhor atender ou guiar estudantes com ${focusProfilesMessage}.
+Use bullet points para cada categoria.`;
             callGeminiAPI(prompt, 'gemini-content-suggestion-content', 'gemini-content-loading', 'gemini-content-suggestion-section', 'generateContentSuggestionButton');
         }
 
-        // --- CONTROLE DE VISUALIZAÇÃO (Admin vs Usuário) ---
         function toggleAdminView() {
             const password = prompt("Digite a senha de administrador:", "");
             if (password === ADMIN_PASSWORD) {
@@ -554,9 +596,7 @@ Seja criativo e prático. Use bullet points.`;
             loadUserQuiz(); 
         }
 
-        // --- INICIALIZAÇÃO ---
         document.addEventListener('DOMContentLoaded', () => {
-            // Inicializa referências aos elementos do DOM após o carregamento
             mainHeader = document.getElementById('main-header');
             userTestSection = document.getElementById('user-test-section');
             adminReportSection = document.getElementById('admin-report-section');
@@ -564,13 +604,11 @@ Seja criativo e prático. Use bullet points.`;
             adminToggleButton = document.getElementById('adminToggleButton');
             quizContainer = document.getElementById('quiz-container');
 
-            // Configuração inicial de visibilidade
             if(adminReportSection) adminReportSection.classList.add('hidden');
             if(thankYouSection) thankYouSection.classList.add('hidden');
             if(userTestSection) userTestSection.classList.remove('hidden'); 
             loadUserQuiz(); 
 
-            // Event Listeners
             document.getElementById('submitUserTestButton')?.addEventListener('click', submitUserTest);
             document.getElementById('filterButton')?.addEventListener('click', applyAdminFiltersAndDisplay);
             document.getElementById('resetFiltersButton')?.addEventListener('click', () => {
@@ -608,7 +646,6 @@ Seja criativo e prático. Use bullet points.`;
     </header>
 
     <main class="container mx-auto p-4 sm:p-6 md:p-8 mt-4">
-        <!-- Seção do Teste para o Usuário -->
         <section id="user-test-section">
             <div class="section-card mb-8" id="personal-info-section-card">
                 <h2 class="text-xl font-semibold text-gray-800 mb-6 text-center">Informações Pessoais</h2>
@@ -629,7 +666,6 @@ Seja criativo e prático. Use bullet points.`;
             </div>
         </section>
 
-        <!-- Seção de Agradecimento ao Usuário -->
         <section id="thank-you-section" class="hidden text-center section-card py-12">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-20 w-20 text-green-500 mx-auto mb-4" viewBox="0 0 20 20" fill="currentColor">
                 <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
@@ -639,7 +675,6 @@ Seja criativo e prático. Use bullet points.`;
             <button onclick="window.location.reload()" class="btn-secondary mt-8">Fazer o teste novamente</button>
         </section>
 
-        <!-- Seção do Painel Admin (inicialmente oculta) -->
         <section id="admin-report-section" class="hidden">
             <div class="section-card filter-section mb-8">
                 <h2 class="text-2xl font-semibold text-gray-800 mb-6 text-center">Filtrar Resultados e Ações IA</h2>
@@ -709,7 +744,7 @@ service cloud.firestore {
 }</code></pre>
                         Para produção, restrinja a leitura apenas a UIDs de administradores e a escrita conforme necessário.
                     </li>
-                     <li><strong>Configuração do Firebase:</strong> Certifique-se de que a `firebaseConfig` (ou `__firebase_config` no ambiente Canvas) está correta e seu projeto Firebase está ativo e corretamente configurado para web apps. PREENCHA OS PLACEHOLDERS da `firebaseConfigDefault` se estiver rodando fora do Canvas.</li>
+                     <li><strong>Configuração do Firebase:</strong> Certifique-se de que a `firebaseConfigDefault` (ou `__firebase_config` no ambiente Canvas) está correta e seu projeto Firebase está ativo e corretamente configurado para web apps. PREENCHA OS PLACEHOLDERS da `firebaseConfigDefault` se estiver rodando fora do Canvas.</li>
                 </ul>
             </div>
         </section>
@@ -719,4 +754,4 @@ service cloud.firestore {
         <p class="text-gray-500">&copy; <span id="currentYear"></span> Plataforma Vocacional. Todos os direitos reservados.</p>
     </footer>
 </body>
-</html>
+</ht
