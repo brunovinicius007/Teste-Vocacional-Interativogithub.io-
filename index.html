@@ -33,12 +33,24 @@
 
         // --- Configuração Geral ---
         const ADMIN_PASSWORD = "admin123"; // SENHA SIMULADA - NÃO USE EM PRODUÇÃO!
-        const firebaseConfigDefault = { /* ... sua config ... */ };
+        const firebaseConfigDefault = { 
+            apiKey: "YOUR_API_KEY", // PREENCHA COM SUA CONFIG REAL
+            authDomain: "YOUR_AUTH_DOMAIN",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_STORAGE_BUCKET",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
         let effectiveFirebaseConfig = firebaseConfigDefault;
-        // ... (lógica de __firebase_config) ...
+        
         if (typeof __firebase_config !== 'undefined' && __firebase_config !== '{}') { 
-            try { effectiveFirebaseConfig = JSON.parse(__firebase_config); } 
+            try { 
+                effectiveFirebaseConfig = JSON.parse(__firebase_config); 
+                console.log("Usando config do Canvas Firebase.");
+            } 
             catch (e) { console.error("Erro parse __firebase_config:", e); }
+        } else {
+            console.log("Config do Canvas não encontrada ou vazia, usando config padrão. PREENCHA OS PLACEHOLDERS se for rodar fora do Canvas.");
         }
         
         const app = initializeApp(effectiveFirebaseConfig);
@@ -51,19 +63,15 @@
         let isAdminView = false;
         let overallProfileChart = null;
         let profilesByAgeChart = null;
-        let allSubmissions = []; // Para o relatório admin
+        let allSubmissions = []; 
         let currentAggregatedDataForGemini = {};
-        let userTestAnswers = {}; // Para o teste do usuário
+        let userTestAnswers = {}; 
 
-        const mainHeader = document.getElementById('main-header');
-        const userTestSection = document.getElementById('user-test-section');
-        const adminReportSection = document.getElementById('admin-report-section');
-        const thankYouSection = document.getElementById('thank-you-section');
-        const adminToggleButton = document.getElementById('adminToggleButton');
-        const quizContainer = document.getElementById('quiz-container'); // Teste
-
+        // Obtendo elementos do DOM uma vez para evitar múltiplas chamadas
+        let mainHeader, userTestSection, adminReportSection, thankYouSection, adminToggleButton, quizContainer;
+        
         // --- DADOS DO QUIZ (Teste Vocacional) ---
-        const quizData = [ /* ... Seus dados do quiz aqui (8 perguntas) ... */
+        const quizData = [
             {
                 question: "No seu tempo livre, o que você mais gosta de fazer?",
                 answers: [
@@ -73,7 +81,6 @@
                     { text: "Desenhar, tocar um instrumento, fotografar ou criar algo novo.", profile: "artes" }
                 ]
             },
-            // ... (restante das 7 perguntas omitidas para brevidade, mas devem estar aqui)
              {
                 question: "Se um grupo de amigos precisa de ajuda para organizar uma viagem, qual seria sua principal contribuição?",
                 answers: [
@@ -139,11 +146,55 @@
             }
         ];
 
+        // --- FUNÇÕES DE AUTENTICAÇÃO (Firebase) ---
+        async function authenticateUser() {
+            return new Promise((resolve) => {
+                const unsubscribe = onAuthStateChanged(auth, async (user) => {
+                    unsubscribe(); 
+                    if (user) {
+                        console.log("Usuário já autenticado:", user.uid, "Anônimo:", user.isAnonymous);
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token && user.isAnonymous) {
+                            console.log("Tentando atualizar para Custom Token com __initial_auth_token.");
+                            try {
+                                await signInWithCustomToken(auth, __initial_auth_token);
+                                console.log("Sucesso ao autenticar com Custom Token. UID:", auth.currentUser.uid);
+                            } catch (customTokenError) {
+                                console.error("Erro ao autenticar com Custom Token (mantendo anônimo):", customTokenError);
+                            }
+                        }
+                    } else if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        console.log("Nenhum usuário. Tentando autenticar com __initial_auth_token.");
+                        try {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                            console.log("Sucesso ao autenticar com Custom Token. UID:", auth.currentUser.uid);
+                        } catch (customTokenError) {
+                            console.error("Erro ao autenticar com Custom Token, tentando anônimo:", customTokenError);
+                            try {
+                                await signInAnonymously(auth);
+                                console.log("Autenticado anonimamente após falha no Custom Token. UID:", auth.currentUser.uid);
+                            } catch (anonError) {
+                                console.error("Erro ao autenticar anonimamente:", anonError);
+                            }
+                        }
+                    } else {
+                        console.log("Nenhum usuário e __initial_auth_token não definido. Tentando autenticação anônima.");
+                        try {
+                            await signInAnonymously(auth);
+                            console.log("Autenticado anonimamente. UID:", auth.currentUser.uid);
+                        } catch (anonError) {
+                            console.error("Erro ao autenticar anonimamente:", anonError);
+                        }
+                    }
+                    resolve(auth.currentUser);
+                });
+            });
+        }
 
         // --- FUNÇÕES DO TESTE DO USUÁRIO ---
         function loadUserQuiz() {
-            quizContainer.innerHTML = ''; // Limpa quiz anterior
-            userTestAnswers = {}; // Reseta respostas
+            if (!quizContainer) return; // Garante que o elemento existe
+            quizContainer.innerHTML = ''; 
+            userTestAnswers = {}; 
             quizData.forEach((item, index) => {
                 const questionEl = document.createElement('div');
                 questionEl.classList.add('section-card', 'mb-6', 'bg-white', 'p-6', 'rounded-xl', 'shadow-md');
@@ -162,7 +213,7 @@
                         optionButtons.forEach(btn => btn.classList.remove('selected'));
                         button.classList.add('selected');
                         userTestAnswers[index] = button.dataset.profile;
-                        document.getElementById('user-test-error').textContent = ''; 
+                        if(document.getElementById('user-test-error')) document.getElementById('user-test-error').textContent = ''; 
                     });
                 });
                 quizContainer.appendChild(questionEl);
@@ -177,26 +228,25 @@
             const personalInfoError = document.getElementById('personal-info-error');
             const userTestError = document.getElementById('user-test-error');
 
+            if (!personalInfoError || !userTestError || !nomeInput || !idadeInput || !sexoInput || !celularInput) return;
+
             personalInfoError.textContent = '';
             userTestError.textContent = '';
 
-            // Validar informações pessoais
             if (!nomeInput.value.trim()) { personalInfoError.textContent = 'Nome é obrigatório.'; return; }
-            if (!idadeInput.value || idadeInput.value < 10 || idadeInput.value > 99) { personalInfoError.textContent = 'Idade válida (10-99) é obrigatória.'; return; }
+            if (!idadeInput.value || parseInt(idadeInput.value, 10) < 10 || parseInt(idadeInput.value, 10) > 99) { personalInfoError.textContent = 'Idade válida (10-99) é obrigatória.'; return; }
             if (!sexoInput.value) { personalInfoError.textContent = 'Sexo é obrigatório.'; return; }
 
-            // Validar respostas do quiz
             if (Object.keys(userTestAnswers).length < quizData.length) {
                 userTestError.textContent = 'Por favor, responda todas as perguntas do teste.';
                 return;
             }
 
-            // Calcular perfil resultante
             const scores = { exatas: 0, humanas: 0, biologicas: 0, artes: 0 };
             for (const key in userTestAnswers) { scores[userTestAnswers[key]]++; }
             const maxScore = Math.max(...Object.values(scores));
             const bestProfiles = Object.keys(scores).filter(key => scores[key] === maxScore);
-            const answeredProfile = bestProfiles.length === 1 ? bestProfiles[0] : bestProfiles; // Salva como array se misto
+            const answeredProfile = bestProfiles.length === 1 ? bestProfiles[0] : bestProfiles;
 
             const submissionData = {
                 nome: nomeInput.value.trim(),
@@ -204,74 +254,94 @@
                 sexo: sexoInput.value,
                 celular: celularInput.value.trim() || null,
                 answeredProfile: answeredProfile,
-                userAnswers: userTestAnswers, // Salva as respostas individuais também
+                userAnswers: userTestAnswers, 
                 timestamp: serverTimestamp()
             };
 
             const submitTestButton = document.getElementById('submitUserTestButton');
-            submitTestButton.disabled = true;
-            submitTestButton.textContent = 'Enviando...';
+            if (submitTestButton) {
+                submitTestButton.disabled = true;
+                submitTestButton.textContent = 'Enviando...';
+            }
 
             try {
-                // Autenticar usuário para escrita (anônimo ou com token)
-                const user = await authenticateUser(); // Garante que há um usuário
+                const user = await authenticateUser(); 
                 if (!user) {
                     throw new Error("Falha na autenticação antes de salvar os dados.");
                 }
-
                 const submissionsColPath = `artifacts/${appId}/vocationalTestSubmissions`;
                 await addDoc(collection(db, submissionsColPath), submissionData);
                 console.log("Dados do teste salvos com sucesso!", submissionData);
                 
-                userTestSection.classList.add('hidden');
-                thankYouSection.classList.remove('hidden');
-                mainHeader.querySelector('h1').textContent = "Obrigado por Participar!";
-                adminToggleButton.classList.add('hidden'); // Esconde botão admin após teste
+                if(userTestSection) userTestSection.classList.add('hidden');
+                if(thankYouSection) thankYouSection.classList.remove('hidden');
+                if(mainHeader) mainHeader.querySelector('h1').textContent = "Obrigado por Participar!";
+                if(adminToggleButton) adminToggleButton.classList.add('hidden'); 
             } catch (error) {
                 console.error("Erro ao salvar dados do teste: ", error);
-                userTestError.textContent = `Erro ao enviar seus dados: ${error.message}. Tente novamente.`;
+                if(userTestError) userTestError.textContent = `Erro ao enviar seus dados: ${error.message}. Tente novamente.`;
             } finally {
-                submitTestButton.disabled = false;
-                submitTestButton.textContent = 'Finalizar e Ver Meu Perfil (Salvar)';
+                if (submitTestButton) {
+                    submitTestButton.disabled = false;
+                    submitTestButton.textContent = 'Finalizar e Ver Meu Perfil (Salvar)';
+                }
             }
         }
 
-        // --- FUNÇÕES DO PAINEL ADMIN ---
-        // createOverallProfileChart, createProfilesByAgeChart (adaptadas para admin)
-        // authenticateUser (reutilizada)
-        // loadAndDisplayData (renomeada para loadAdminReportData)
-        // getSampleData (reutilizada)
-        // applyFiltersAndDisplay (renomeada para applyAdminFiltersAndDisplay)
-        // callGeminiAPI, generateGeminiInsights, generateContentSuggestions (reutilizadas)
-
+        // --- FUNÇÕES DO PAINEL ADMIN (GRÁFICOS E FILTROS) ---
         function createAdminOverallProfileChart(data) {
-            const ctx = document.getElementById('overallProfileChart').getContext('2d');
+            const ctx = document.getElementById('overallProfileChart')?.getContext('2d');
+            if (!ctx) return null;
             const profileCounts = { exatas: 0, humanas: 0, biologicas: 0, artes: 0, total: 0 };
             data.forEach(submission => {
-                profileCounts.total++; // Total de submissões processadas
+                profileCounts.total++;
                 if (submission.answeredProfile) {
                     if (Array.isArray(submission.answeredProfile)) {
-                        submission.answeredProfile.forEach(profile => {
-                            if (profileCounts.hasOwnProperty(profile)) profileCounts[profile]++;
-                        });
+                        submission.answeredProfile.forEach(profile => { if (profileCounts.hasOwnProperty(profile)) profileCounts[profile]++; });
                     } else {
-                         if (profileCounts.hasOwnProperty(submission.answeredProfile)) profileCounts[submission.answeredProfile]++;
+                        if (profileCounts.hasOwnProperty(submission.answeredProfile)) profileCounts[submission.answeredProfile]++;
                     }
                 }
             });
-
-            if (overallProfileChart) overallProfileChart.destroy(); // Destroi gráfico anterior
-            overallProfileChart = new Chart(ctx, { /* ... config do gráfico ... */ }); // Recria
+            if (overallProfileChart instanceof Chart) overallProfileChart.destroy();
+            overallProfileChart = new Chart(ctx, {
+                type: 'pie', data: { labels: ['Exatas', 'Humanas', 'Biológicas', 'Artes'], datasets: [{ label: 'Distribuição', data: [profileCounts.exatas, profileCounts.humanas, profileCounts.biologicas, profileCounts.artes], backgroundColor: ['#3B82F6', '#10B981', '#F59E0B', '#EC4899'], borderColor: '#FFFFFF', borderWidth: 2 }] },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { title: { display: true, text: 'Distribuição Geral (Admin)', font: { size: 18 }, padding: 10 }, legend: { position: 'bottom' } } }
+            });
             return profileCounts;
         }
 
         function createAdminProfilesByAgeChart(data) {
-            const ctx = document.getElementById('profilesByAgeChart').getContext('2d');
-            const ageGroups = { /* ... estrutura ... */ };
-            // ... (lógica de contagem por idade igual à original do admin) ...
-            if (profilesByAgeChart) profilesByAgeChart.destroy();
-            profilesByAgeChart = new Chart(ctx, { /* ... config do gráfico ... */ });
+            const ctx = document.getElementById('profilesByAgeChart')?.getContext('2d');
+            if(!ctx) return null;
+            const ageGroups = { '15-17': { exatas: 0, humanas: 0, biologicas: 0, artes: 0, totalRespondents: 0 }, '18-20': { exatas: 0, humanas: 0, biologicas: 0, artes: 0, totalRespondents: 0 }, '21-22+': { exatas: 0, humanas: 0, biologicas: 0, artes: 0, totalRespondents: 0 } };
+            const uniqueRespondentsByAge = { '15-17': new Set(), '18-20': new Set(), '21-22+': new Set() };
+            data.forEach(submission => {
+                let ageGroupKey; const age = parseInt(submission.idade, 10);
+                if (age >= 15 && age <= 17) ageGroupKey = '15-17'; else if (age >= 18 && age <= 20) ageGroupKey = '18-20'; else if (age >= 21) ageGroupKey = '21-22+';
+                if (ageGroupKey) {
+                    uniqueRespondentsByAge[ageGroupKey].add(submission.id); // Usar um ID único da submissão
+                    if (submission.answeredProfile) {
+                        if (Array.isArray(submission.answeredProfile)) { submission.answeredProfile.forEach(p => { if(ageGroups[ageGroupKey].hasOwnProperty(p)) ageGroups[ageGroupKey][p]++; });
+                        } else { if(ageGroups[ageGroupKey].hasOwnProperty(submission.answeredProfile)) ageGroups[ageGroupKey][submission.answeredProfile]++; }
+                    }
+                }
+            });
+            Object.keys(uniqueRespondentsByAge).forEach(key => { ageGroups[key].totalRespondents = uniqueRespondentsByAge[key].size; });
+            if (profilesByAgeChart instanceof Chart) profilesByAgeChart.destroy();
+            profilesByAgeChart = new Chart(ctx, {
+                type: 'bar', data: { labels: ['15-17', '18-20', '21-22+'], datasets: [ { label: 'Exatas', data: [ageGroups['15-17'].exatas, ageGroups['18-20'].exatas, ageGroups['21-22+'].exatas], backgroundColor: '#3B82F6' }, { label: 'Humanas', data: [ageGroups['15-17'].humanas, ageGroups['18-20'].humanas, ageGroups['21-22+'].humanas], backgroundColor: '#10B981' }, { label: 'Biológicas', data: [ageGroups['15-17'].biologicas, ageGroups['18-20'].biologicas, ageGroups['21-22+'].biologicas], backgroundColor: '#F59E0B' }, { label: 'Artes', data: [ageGroups['15-17'].artes, ageGroups['18-20'].artes, ageGroups['21-22+'].artes], backgroundColor: '#EC4899' }] },
+                options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, title: {display:true, text: 'Nº de Pessoas'} } , x: {title: {display:true, text: 'Faixa Etária'}}}, plugins: { title: { display: true, text: 'Perfis por Idade (Admin)', font: { size: 18 }, padding: 10 }, legend: { position: 'top' } } }
+            });
             return ageGroups;
+        }
+        
+        function getSampleData() { 
+            return [
+                { id: 's1', nome: 'Ana Silva', idade: 16, sexo: 'feminino', answeredProfile: 'humanas', timestamp: new Date() },
+                { id: 's2', nome: 'Bruno Costa', idade: 17, sexo: 'masculino', answeredProfile: 'exatas', timestamp: new Date() },
+                { id: 's3', nome: 'Carla Dias', idade: 21, sexo: 'feminino', answeredProfile: 'artes', timestamp: new Date() },
+            ];
         }
 
         async function loadAdminReportData() {
@@ -280,13 +350,15 @@
             const noDataMessage = document.getElementById('admin-no-data-message');
             const geminiSections = [document.getElementById('gemini-analysis-section'), document.getElementById('gemini-content-suggestion-section')];
             
-            loadingIndicator.classList.remove('hidden');
-            chartsContainer.classList.add('hidden');
+            if(!loadingIndicator || !chartsContainer || !noDataMessage) return;
+
+            loadingIndicator.classList.remove('hidden'); 
+            chartsContainer.classList.add('hidden'); 
             noDataMessage.classList.add('hidden');
-            geminiSections.forEach(s => s.classList.add('hidden'));
+            geminiSections.forEach(s => s?.classList.add('hidden'));
 
             try {
-                const user = await authenticateUser();
+                const user = await authenticateUser(); 
                 if (!user) { throw new Error("Autenticação necessária para admin."); }
 
                 const submissionsColPath = `artifacts/${appId}/vocationalTestSubmissions`;
@@ -294,167 +366,236 @@
                 allSubmissions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
                 if (allSubmissions.length === 0) { 
-                    noDataMessage.textContent = "Nenhum dado real encontrado. Exibindo dados de exemplo para demonstração.";
+                    noDataMessage.textContent = "Nenhum dado real encontrado. Exibindo dados de exemplo.";
                     noDataMessage.classList.remove('hidden');
-                    allSubmissions = getSampleData(); // Usar dados de exemplo
+                    allSubmissions = getSampleData(); 
                 }
                 applyAdminFiltersAndDisplay();
-            } catch (error) { /* ... tratamento de erro ... */ }
-            finally { /* ... lógica do finally ... */ }
+            } catch (error) { 
+                console.error("Erro loadAdminReportData:", error); 
+                noDataMessage.innerHTML = `Erro ao carregar dados do admin: ${error.message}<br>Exibindo exemplos.`; 
+                noDataMessage.classList.remove('hidden'); 
+                allSubmissions = getSampleData(); 
+                applyAdminFiltersAndDisplay(); 
+            } finally { 
+                loadingIndicator.classList.add('hidden'); 
+                if(allSubmissions.length > 0) chartsContainer.classList.remove('hidden');
+            }
         }
 
         function applyAdminFiltersAndDisplay() {
-            // ... (lógica de filtros igual à original do admin) ...
-            // Chamar createAdminOverallProfileChart e createAdminProfilesByAgeChart
-            // Atualizar currentAggregatedDataForGemini
-            // Mostrar/esconder #admin-no-data-message e #charts-container
+            const minAgeEl = document.getElementById('minAge');
+            const maxAgeEl = document.getElementById('maxAge');
+            const profileFilterEl = document.getElementById('profileFilter');
+            const noDataMsgEl = document.getElementById('admin-no-data-message');
+            const chartsEl = document.getElementById('charts-container');
+
+            if(!minAgeEl || !maxAgeEl || !profileFilterEl || !noDataMsgEl || !chartsEl) return;
+
+            const minAge = parseInt(minAgeEl.value, 10) || 0;
+            const maxAge = parseInt(maxAgeEl.value, 10) || 100;
+            const selectedProfileFilter = profileFilterEl.value;
+            
+            [document.getElementById('gemini-analysis-section'), document.getElementById('gemini-content-suggestion-section')]
+                .forEach(s => s?.classList.add('hidden'));
+
+            const filteredData = allSubmissions.filter(s => {
+                const age = parseInt(s.idade, 10);
+                const ma = age >= minAge && age <= maxAge;
+                let mp = true;
+                if (selectedProfileFilter) { mp = Array.isArray(s.answeredProfile) ? s.answeredProfile.includes(selectedProfileFilter) : s.answeredProfile === selectedProfileFilter; }
+                return ma && mp;
+            });
+            const overall = createAdminOverallProfileChart(filteredData); 
+            const byAge = createAdminProfilesByAgeChart(filteredData);   
+            currentAggregatedDataForGemini = { overall, byAge, totalRespondentsOverall: overall?.total || 0 };
+            
+            if (filteredData.length === 0) { 
+                noDataMsgEl.textContent = allSubmissions.length > 0 ? "Nenhum resultado para os filtros." : "Nenhum dado para exibir."; 
+                noDataMsgEl.classList.remove('hidden'); 
+                chartsEl.classList.add('hidden'); 
+            } else { 
+                noDataMsgEl.classList.add('hidden'); 
+                chartsEl.classList.remove('hidden'); 
+            }
         }
         
-        // ... (Funções Gemini: callGeminiAPI, generateGeminiInsights, generateContentSuggestions - podem ser reutilizadas) ...
+        // --- FUNÇÕES DA API GEMINI ---
+        async function callGeminiAPI(prompt, resultDivId, loadingDivId, sectionDivId, buttonId) {
+            const button = document.getElementById(buttonId);
+            const resultDiv = document.getElementById(resultDivId);
+            const loadingDiv = document.getElementById(loadingDivId);
+            const sectionDiv = document.getElementById(sectionDivId);
 
+            if(!button || !resultDiv || !loadingDiv || !sectionDiv) return;
+
+            button.disabled = true;
+            resultDiv.innerHTML = '';
+            loadingDiv.classList.remove('hidden');
+            sectionDiv.classList.remove('hidden');
+
+            const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
+            const apiKey = ""; 
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!response.ok) {
+                    const errorBody = await response.text();
+                    throw new Error(`Erro na API Gemini: ${response.status} ${response.statusText} - ${errorBody}`);
+                }
+                const result = await response.json();
+                if (result.candidates && result.candidates[0]?.content?.parts?.[0]) {
+                    let text = result.candidates[0].content.parts[0].text;
+                    text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+                    text = text.replace(/^\* (.*$)/gm, '<li>$1</li>'); 
+                    text = text.replace(/\n/g, '<br>');
+                    if (text.includes('<li>')) {
+                        text = '<ul>' + text.replace(/<br><li>/g, '<li>').replace(/<\/li><br>/g, '</li>') + '</ul>';
+                        text = text.replace(/<br><ul>/g, '<ul>').replace(/<\/ul><br>/g, '</ul>');
+                    }
+                    resultDiv.innerHTML = text;
+                } else {
+                    resultDiv.innerHTML = '<p class="text-red-600">Resposta da IA em formato inesperado.</p>';
+                    console.error("Resposta inesperada da API Gemini:", result);
+                }
+            } catch (error) {
+                console.error("Erro ao chamar API Gemini:", error);
+                resultDiv.innerHTML = `<p class="text-red-600">Erro: ${error.message}.</p>`;
+            } finally {
+                loadingDiv.classList.add('hidden');
+                button.disabled = false;
+            }
+        }
+
+        async function generateGeminiInsights() {
+            const { overall, byAge, totalRespondentsOverall } = currentAggregatedDataForGemini;
+            const analysisContentEl = document.getElementById('gemini-analysis-content');
+            const analysisSectionEl = document.getElementById('gemini-analysis-section');
+
+            if(!analysisContentEl || !analysisSectionEl) return;
+
+            if (!overall || !byAge || totalRespondentsOverall === 0) {
+                analysisContentEl.innerHTML = '<p class="text-gray-600">Dados insuficientes para análise.</p>';
+                analysisSectionEl.classList.remove('hidden');
+                return;
+            }
+            const prompt = `Você é um analista de dados educacionais. Analise os dados de um teste vocacional e forneça insights, tendências e 2-3 sugestões de ações para uma instituição. Total de respondentes: ${totalRespondentsOverall}.
+Dados Gerais: Exatas(${overall.exatas}), Humanas(${overall.humanas}), Biológicas(${overall.biologicas}), Artes(${overall.artes}).
+Por Idade (15-17): Exatas(${byAge['15-17']?.exatas || 0}), Humanas(${byAge['15-17']?.humanas || 0}), Bio(${byAge['15-17']?.biologicas || 0}), Artes(${byAge['15-17']?.artes || 0}). Total na faixa: ${byAge['15-17']?.totalRespondents || 0}.
+Por Idade (18-20): Exatas(${byAge['18-20']?.exatas || 0}), Humanas(${byAge['18-20']?.humanas || 0}), Bio(${byAge['18-20']?.biologicas || 0}), Artes(${byAge['18-20']?.artes || 0}). Total na faixa: ${byAge['18-20']?.totalRespondents || 0}.
+Por Idade (21-22+): Exatas(${byAge['21-22+']?.exatas || 0}), Humanas(${byAge['21-22+']?.humanas || 0}), Bio(${byAge['21-22+']?.biologicas || 0}), Artes(${byAge['21-22+']?.artes || 0}). Total na faixa: ${byAge['21-22+']?.totalRespondents || 0}.
+Análise: 1. Tendências. 2. Insights Notáveis. 3. Sugestões de Ações (2-3). Formato: bullet points.`;
+            callGeminiAPI(prompt, 'gemini-analysis-content', 'gemini-loading', 'gemini-analysis-section', 'generateInsightsButton');
+        }
+
+        async function generateContentSuggestions() {
+            const { overall, totalRespondentsOverall } = currentAggregatedDataForGemini;
+            const suggestionContentEl = document.getElementById('gemini-content-suggestion-content');
+            const suggestionSectionEl = document.getElementById('gemini-content-suggestion-section');
+
+            if (!suggestionContentEl || !suggestionSectionEl) return;
+
+             if (!overall || totalRespondentsOverall === 0) {
+                suggestionContentEl.innerHTML = '<p class="text-gray-600">Dados insuficientes para sugestões.</p>';
+                suggestionSectionEl.classList.remove('hidden');
+                return;
+            }
+
+            const profilesSorted = Object.entries(overall)
+                .filter(([key]) => key !== 'total')
+                .sort(([,a],[,b]) => b-a);
+            
+            const topProfile = profilesSorted.length > 0 ? profilesSorted[0][0] : "geral";
+            const secondProfile = profilesSorted.length > 1 ? profilesSorted[1][0] : null;
+
+            let focusProfiles = `o perfil de "${topProfile}"`;
+            if (secondProfile && profilesSorted[0][1] > 0) { 
+                focusProfiles += ` e secundariamente o perfil de "${secondProfile}"`;
+            } else if (profilesSorted[0] && profilesSorted[0][1] === 0) { 
+                 focusProfiles = "os perfis gerais dos estudantes";
+            }
+
+            const prompt = `Com base nos resultados de um teste vocacional onde o foco principal dos estudantes é ${focusProfiles}, sugira:
+1.  Dois temas para workshops ou palestras que seriam atraentes para esses perfis.
+2.  Dois tópicos para posts de blog ou redes sociais para engajar estudantes com esses interesses.
+3.  Uma possível melhoria ou funcionalidade adicional para um teste vocacional online, pensando nesses perfis.
+Seja criativo e prático. Use bullet points.`;
+            callGeminiAPI(prompt, 'gemini-content-suggestion-content', 'gemini-content-loading', 'gemini-content-suggestion-section', 'generateContentSuggestionButton');
+        }
 
         // --- CONTROLE DE VISUALIZAÇÃO (Admin vs Usuário) ---
         function toggleAdminView() {
             const password = prompt("Digite a senha de administrador:", "");
             if (password === ADMIN_PASSWORD) {
                 isAdminView = true;
-                userTestSection.classList.add('hidden');
-                thankYouSection.classList.add('hidden');
-                adminReportSection.classList.remove('hidden');
-                mainHeader.querySelector('h1').textContent = "Painel Administrativo Vocacional";
-                adminToggleButton.textContent = "Sair do Modo Admin";
-                loadAdminReportData(); // Carrega dados para o admin
-            } else if (password !== null) { // Se não cancelou o prompt
+                if(userTestSection) userTestSection.classList.add('hidden');
+                if(thankYouSection) thankYouSection.classList.add('hidden');
+                if(adminReportSection) adminReportSection.classList.remove('hidden');
+                if(mainHeader) mainHeader.querySelector('h1').textContent = "Painel Administrativo Vocacional";
+                if(adminToggleButton) adminToggleButton.textContent = "Sair do Modo Admin";
+                loadAdminReportData(); 
+            } else if (password !== null) { 
                 alert("Senha incorreta!");
             }
         }
 
         function switchToUserView() {
             isAdminView = false;
-            userTestSection.classList.remove('hidden');
-            adminReportSection.classList.add('hidden');
-            thankYouSection.classList.add('hidden');
-            mainHeader.querySelector('h1').textContent = "Teste Vocacional Interativo";
-            adminToggleButton.textContent = "Acesso Admin";
-            loadUserQuiz(); // Carrega o quiz para o usuário
+            if(userTestSection) userTestSection.classList.remove('hidden');
+            if(adminReportSection) adminReportSection.classList.add('hidden');
+            if(thankYouSection) thankYouSection.classList.add('hidden');
+            if(mainHeader) mainHeader.querySelector('h1').textContent = "Teste Vocacional Interativo";
+            if(adminToggleButton) adminToggleButton.textContent = "Acesso Admin";
+            loadUserQuiz(); 
         }
 
         // --- INICIALIZAÇÃO ---
         document.addEventListener('DOMContentLoaded', () => {
+            // Inicializa referências aos elementos do DOM após o carregamento
+            mainHeader = document.getElementById('main-header');
+            userTestSection = document.getElementById('user-test-section');
+            adminReportSection = document.getElementById('admin-report-section');
+            thankYouSection = document.getElementById('thank-you-section');
+            adminToggleButton = document.getElementById('adminToggleButton');
+            quizContainer = document.getElementById('quiz-container');
+
             // Configuração inicial de visibilidade
-            adminReportSection.classList.add('hidden');
-            thankYouSection.classList.add('hidden');
-            userTestSection.classList.remove('hidden'); // Começa na tela do teste
-            loadUserQuiz(); // Carrega as perguntas do teste
+            if(adminReportSection) adminReportSection.classList.add('hidden');
+            if(thankYouSection) thankYouSection.classList.add('hidden');
+            if(userTestSection) userTestSection.classList.remove('hidden'); 
+            loadUserQuiz(); 
 
-            // Event Listeners do Teste do Usuário
-            document.getElementById('submitUserTestButton').addEventListener('click', submitUserTest);
-
-            // Event Listeners do Painel Admin (só funcionam se a seção estiver visível)
-            document.getElementById('filterButton').addEventListener('click', applyAdminFiltersAndDisplay);
-            document.getElementById('resetFiltersButton').addEventListener('click', () => {
-                document.getElementById('minAge').value = '';
-                document.getElementById('maxAge').value = '';
-                document.getElementById('profileFilter').value = '';
+            // Event Listeners
+            document.getElementById('submitUserTestButton')?.addEventListener('click', submitUserTest);
+            document.getElementById('filterButton')?.addEventListener('click', applyAdminFiltersAndDisplay);
+            document.getElementById('resetFiltersButton')?.addEventListener('click', () => {
+                const minAgeEl = document.getElementById('minAge');
+                const maxAgeEl = document.getElementById('maxAge');
+                const profileFilterEl = document.getElementById('profileFilter');
+                if(minAgeEl) minAgeEl.value = '';
+                if(maxAgeEl) maxAgeEl.value = '';
+                if(profileFilterEl) profileFilterEl.value = '';
                 applyAdminFiltersAndDisplay();
             });
-            document.getElementById('generateInsightsButton').addEventListener('click', generateGeminiInsights); // Reutiliza função
-            document.getElementById('generateContentSuggestionButton').addEventListener('click', generateContentSuggestions); // Reutiliza função
+            document.getElementById('generateInsightsButton')?.addEventListener('click', generateGeminiInsights); 
+            document.getElementById('generateContentSuggestionButton')?.addEventListener('click', generateContentSuggestions); 
             
-            adminToggleButton.addEventListener('click', () => {
-                if (isAdminView) {
-                    switchToUserView();
-                } else {
-                    toggleAdminView();
-                }
-            });
-            document.getElementById('currentYear').textContent = new Date().getFullYear();
-
-            // Funções Gemini (reutilizadas - o código delas não muda)
-            window.callGeminiAPI = async function(prompt, resultDivId, loadingDivId, sectionDivId, buttonId) { /* ... código completo ... */ };
-            window.generateGeminiInsights = async function() { /* ... código completo ... */ };
-            window.generateContentSuggestions = async function() { /* ... código completo ... */ };
-
-            // Adaptação das funções de gráfico para o contexto de admin
-            // (o código delas é extenso, então estou apenas mostrando a estrutura de adaptação)
-             window.createAdminOverallProfileChart = function(data) {
-                const ctx = document.getElementById('overallProfileChart').getContext('2d');
-                const profileCounts = { exatas: 0, humanas: 0, biologicas: 0, artes: 0, total: 0 };
-                data.forEach(submission => {
-                    profileCounts.total++;
-                    if (submission.answeredProfile) {
-                        if (Array.isArray(submission.answeredProfile)) {
-                            submission.answeredProfile.forEach(profile => { if (profileCounts.hasOwnProperty(profile)) profileCounts[profile]++; });
-                        } else {
-                            if (profileCounts.hasOwnProperty(submission.answeredProfile)) profileCounts[submission.answeredProfile]++;
-                        }
+            if(adminToggleButton) {
+                adminToggleButton.addEventListener('click', () => {
+                    if (isAdminView) {
+                        switchToUserView();
+                    } else {
+                        toggleAdminView();
                     }
                 });
-                if (window.overallProfileChart instanceof Chart) window.overallProfileChart.destroy();
-                window.overallProfileChart = new Chart(ctx, {
-                    type: 'pie', data: { labels: ['Exatas', 'Humanas', 'Biológicas', 'Artes'], datasets: [{ label: 'Distribuição', data: [profileCounts.exatas, profileCounts.humanas, profileCounts.biologicas, profileCounts.artes], backgroundColor: ['#3B82F6', '#10B981', '#F59E0B', '#EC4899'], borderColor: '#FFFFFF', borderWidth: 2 }] },
-                    options: { responsive: true, maintainAspectRatio: false, plugins: { title: { display: true, text: 'Distribuição Geral (Admin)', font: { size: 18 }, padding: 10 }, legend: { position: 'bottom' } } }
-                });
-                return profileCounts;
-            };
-            window.createAdminProfilesByAgeChart = function(data) {
-                const ctx = document.getElementById('profilesByAgeChart').getContext('2d');
-                const ageGroups = { '15-17': { exatas: 0, humanas: 0, biologicas: 0, artes: 0, totalRespondents: 0 }, '18-20': { exatas: 0, humanas: 0, biologicas: 0, artes: 0, totalRespondents: 0 }, '21-22+': { exatas: 0, humanas: 0, biologicas: 0, artes: 0, totalRespondents: 0 } };
-                const uniqueRespondentsByAge = { '15-17': new Set(), '18-20': new Set(), '21-22+': new Set() };
-                 data.forEach(submission => {
-                    let ageGroupKey; const age = parseInt(submission.idade, 10);
-                    if (age >= 15 && age <= 17) ageGroupKey = '15-17'; else if (age >= 18 && age <= 20) ageGroupKey = '18-20'; else if (age >= 21) ageGroupKey = '21-22+';
-                    if (ageGroupKey) {
-                        uniqueRespondentsByAge[ageGroupKey].add(submission.id);
-                        if (submission.answeredProfile) {
-                            if (Array.isArray(submission.answeredProfile)) { submission.answeredProfile.forEach(p => { if(ageGroups[ageGroupKey].hasOwnProperty(p)) ageGroups[ageGroupKey][p]++; });
-                            } else { if(ageGroups[ageGroupKey].hasOwnProperty(submission.answeredProfile)) ageGroups[ageGroupKey][submission.answeredProfile]++; }
-                        }
-                    }
-                });
-                Object.keys(uniqueRespondentsByAge).forEach(key => { ageGroups[key].totalRespondents = uniqueRespondentsByAge[key].size; });
-                if (window.profilesByAgeChart instanceof Chart) window.profilesByAgeChart.destroy();
-                window.profilesByAgeChart = new Chart(ctx, {
-                    type: 'bar', data: { labels: ['15-17', '18-20', '21-22+'], datasets: [ { label: 'Exatas', data: [ageGroups['15-17'].exatas, ageGroups['18-20'].exatas, ageGroups['21-22+'].exatas], backgroundColor: '#3B82F6' }, { label: 'Humanas', data: [ageGroups['15-17'].humanas, ageGroups['18-20'].humanas, ageGroups['21-22+'].humanas], backgroundColor: '#10B981' }, { label: 'Biológicas', data: [ageGroups['15-17'].biologicas, ageGroups['18-20'].biologicas, ageGroups['21-22+'].biologicas], backgroundColor: '#F59E0B' }, { label: 'Artes', data: [ageGroups['15-17'].artes, ageGroups['18-20'].artes, ageGroups['21-22+'].artes], backgroundColor: '#EC4899' }] },
-                    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } }, plugins: { title: { display: true, text: 'Perfis por Idade (Admin)', font: { size: 18 }, padding: 10 }, legend: { position: 'top' } } }
-                });
-                return ageGroups;
-            };
-            window.applyAdminFiltersAndDisplay = function() {
-                const minAge = parseInt(document.getElementById('minAge').value, 10) || 0;
-                const maxAge = parseInt(document.getElementById('maxAge').value, 10) || 100;
-                const selectedProfileFilter = document.getElementById('profileFilter').value;
-                const noDataMsgEl = document.getElementById('admin-no-data-message');
-                const chartsEl = document.getElementById('charts-container');
-                [document.getElementById('gemini-analysis-section'), document.getElementById('gemini-content-suggestion-section')].forEach(s => s.classList.add('hidden'));
-
-                const filteredData = allSubmissions.filter(s => {
-                    const age = parseInt(s.idade, 10);
-                    const ma = age >= minAge && age <= maxAge;
-                    let mp = true;
-                    if (selectedProfileFilter) { mp = Array.isArray(s.answeredProfile) ? s.answeredProfile.includes(selectedProfileFilter) : s.answeredProfile === selectedProfileFilter; }
-                    return ma && mp;
-                });
-                const overall = createAdminOverallProfileChart(filteredData); // Usa a função admin
-                const byAge = createAdminProfilesByAgeChart(filteredData);   // Usa a função admin
-                currentAggregatedDataForGemini = { overall, byAge, totalRespondentsOverall: overall.total };
-                if (filteredData.length === 0) { noDataMsgEl.textContent = allSubmissions.length > 0 ? "Nenhum resultado para os filtros." : "Nenhum dado para exibir."; noDataMsgEl.classList.remove('hidden'); chartsEl.classList.add('hidden'); } 
-                else { noDataMsgEl.classList.add('hidden'); chartsEl.classList.remove('hidden'); }
-            };
-             window.loadAdminReportData = async function() {
-                const loadingIndicator = document.getElementById('admin-loading-indicator');
-                const chartsContainer = document.getElementById('charts-container');
-                const noDataMessage = document.getElementById('admin-no-data-message');
-                loadingIndicator.classList.remove('hidden'); chartsContainer.classList.add('hidden'); noDataMessage.classList.add('hidden');
-                try {
-                    const user = await authenticateUser(); if (!user) throw new Error("Autenticação admin falhou.");
-                    const snapshot = await getDocs(collection(db, `artifacts/${appId}/vocationalTestSubmissions`));
-                    allSubmissions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    if (allSubmissions.length === 0) { noDataMessage.textContent = "Nenhum dado real. Exibindo exemplos."; noDataMessage.classList.remove('hidden'); allSubmissions = getSampleData(); }
-                    applyAdminFiltersAndDisplay();
-                } catch (error) { console.error("Erro loadAdminReportData:", error); noDataMessage.innerHTML = `Erro ao carregar dados do admin: ${error.message}<br>Exibindo exemplos.`; noDataMessage.classList.remove('hidden'); allSubmissions = getSampleData(); applyAdminFiltersAndDisplay(); } 
-                finally { loadingIndicator.classList.add('hidden'); if(allSubmissions.length > 0) chartsContainer.classList.remove('hidden');}
-            };
+            }
+            const currentYearEl = document.getElementById('currentYear');
+            if (currentYearEl) currentYearEl.textContent = new Date().getFullYear();
         });
     </script>
 </head>
@@ -517,11 +658,11 @@
                 </div>
             </div>
 
-            <div id="admin-loading-indicator" class="text-center py-10 hidden"> <!-- Indicador de loading do admin -->
+            <div id="admin-loading-indicator" class="text-center py-10 hidden"> 
                 <svg class="animate-spin h-10 w-10 text-blue-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
                 <p class="mt-3 text-lg font-medium text-gray-600">Carregando dados do relatório...</p>
             </div>
-            <div id="admin-no-data-message" class="text-center py-10 section-card hidden"> <!-- Mensagem de sem dados do admin -->
+            <div id="admin-no-data-message" class="text-center py-10 section-card hidden"> 
                  <p class="mt-4 text-xl font-semibold text-gray-700">Oops! Nenhum dado para exibir no relatório.</p>
             </div>
             <div id="charts-container" class="grid grid-cols-1 lg:grid-cols-2 gap-8 hidden">
@@ -530,16 +671,46 @@
             </div>
             <section id="gemini-analysis-section" class="section-card gemini-section mt-8 hidden">
                 <h2 class="text-2xl font-semibold text-gray-800 mb-4 text-center">Análise IA dos Dados ✨</h2>
-                <div id="gemini-loading" class="text-center py-5 hidden"><p>Gerando insights...</p></div>
+                <div id="gemini-loading" class="text-center py-5 hidden">
+                     <svg class="animate-spin h-8 w-8 text-purple-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <p class="mt-2 text-md font-medium text-gray-600">Gerando insights...</p>
+                </div>
                 <div id="gemini-analysis-content" class="prose max-w-none text-gray-700"></div>
             </section>
             <section id="gemini-content-suggestion-section" class="section-card gemini-section mt-8 hidden">
                 <h2 class="text-2xl font-semibold text-gray-800 mb-4 text-center">Sugestões IA de Conteúdo ✨</h2>
-                <div id="gemini-content-loading" class="text-center py-5 hidden"><p>Gerando sugestões...</p></div>
+                <div id="gemini-content-loading" class="text-center py-5 hidden">
+                    <svg class="animate-spin h-8 w-8 text-pink-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <p class="mt-2 text-md font-medium text-gray-600">Gerando sugestões...</p>
+                </div>
                 <div id="gemini-content-suggestion-content" class="prose max-w-none text-gray-700"></div>
             </section>
             <div class="mt-10 p-6 section-card text-sm text-gray-600">
-                <!-- Observações Importantes (já existentes no painel admin) -->
+                 <h3 class="text-lg font-semibold text-gray-800 mb-3">Observações Importantes:</h3>
+                <ul class="list-disc list-inside space-y-2">
+                    <li><strong>Coleta de Dados:</strong> Esta página assume que os dados do "Teste Vocacional Interativo" estão sendo salvos na coleção `artifacts/{appId}/vocationalTestSubmissions` no Firestore. Modifique o script do teste para incluir essa funcionalidade.</li>
+                    <li><strong>Relatório por Curso Específico:</strong> O teste atual identifica perfis gerais. Para relatórios por curso, o teste precisaria capturar o interesse em cursos específicos.</li>
+                    <li><strong>Segurança e Acesso (Crítico):</strong> O erro "Missing or insufficient permissions" geralmente é causado por regras de segurança do Firestore. 
+                        <strong class="text-red-600">Ajuste suas regras de segurança no Firebase Console.</strong> Para desenvolvimento, você pode usar:
+                        <pre class="bg-gray-100 p-2 rounded-md text-xs my-1"><code>rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /artifacts/{appId}/vocationalTestSubmissions/{docId} {
+      allow read: if request.auth != null; 
+      allow write: if request.auth != null; // Permite escrita se autenticado para o teste
+    }
+  }
+}</code></pre>
+                        Para produção, restrinja a leitura apenas a UIDs de administradores e a escrita conforme necessário.
+                    </li>
+                     <li><strong>Configuração do Firebase:</strong> Certifique-se de que a `firebaseConfig` (ou `__firebase_config` no ambiente Canvas) está correta e seu projeto Firebase está ativo e corretamente configurado para web apps. PREENCHA OS PLACEHOLDERS da `firebaseConfigDefault` se estiver rodando fora do Canvas.</li>
+                </ul>
             </div>
         </section>
     </main>
