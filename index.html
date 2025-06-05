@@ -26,6 +26,11 @@
         .option-btn:hover:not(.selected) {
             background-color: #e5e7eb; /* bg-gray-200 */
         }
+        .error-message {
+            color: #dc2626; /* text-red-600 */
+            font-size: 0.875rem; /* text-sm */
+            margin-top: 0.5rem; /* mt-2 */
+        }
     </style>
 </head>
 <body class="bg-gray-100 text-gray-800">
@@ -44,6 +49,7 @@
             <button id="submit-btn" class="bg-blue-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-blue-700 transition-colors shadow-lg disabled:bg-gray-400 disabled:cursor-not-allowed">
                 Ver Meu Perfil
             </button>
+            <div id="error-message-container" class="error-message"></div>
         </footer>
 
         <div id="result-container" class="hidden mt-10 p-6 md:p-8 bg-white rounded-2xl shadow-xl border border-gray-200">
@@ -153,6 +159,7 @@
         const quizContainer = document.getElementById('quiz-container');
         const submitBtn = document.getElementById('submit-btn');
         const resultContainer = document.getElementById('result-container');
+        const errorMessageContainer = document.getElementById('error-message-container');
         let userAnswers = {};
 
         function loadQuiz() {
@@ -165,7 +172,7 @@
                     <p class="text-lg font-semibold mb-4">${index + 1}. ${item.question}</p>
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         ${item.answers.map(answer => `
-                            <button class="option-btn w-full text-left p-3 bg-gray-100 rounded-lg" data-profile="${answer.profile}">
+                            <button class="option-btn w-full text-left p-3 bg-gray-100 rounded-lg hover:bg-gray-200" data-profile="${answer.profile}">
                                 ${answer.text}
                             </button>
                         `).join('')}
@@ -180,6 +187,7 @@
                         // Adiciona a classe 'selected' ao botão clicado
                         button.classList.add('selected');
                         userAnswers[index] = button.dataset.profile;
+                        errorMessageContainer.textContent = ''; // Limpa a mensagem de erro ao selecionar uma opção
                     });
                 });
 
@@ -188,8 +196,12 @@
         }
 
         function showResult() {
+            // Limpa mensagens de erro anteriores
+            errorMessageContainer.textContent = '';
+
             if (Object.keys(userAnswers).length < quizData.length) {
-                alert('Por favor, responda todas as perguntas antes de ver o resultado.');
+                // Exibe a mensagem de erro diretamente na página
+                errorMessageContainer.textContent = 'Por favor, responda todas as perguntas antes de ver o resultado.';
                 return;
             }
 
@@ -227,8 +239,9 @@
 
             resultContainer.innerHTML = resultHTML;
             resultContainer.classList.remove('hidden');
-            submitBtn.classList.add('hidden');
-            quizContainer.classList.add('hidden');
+            submitBtn.classList.add('hidden'); // Esconde o botão "Ver Meu Perfil"
+            quizContainer.classList.add('hidden'); // Esconde as perguntas
+            errorMessageContainer.classList.add('hidden'); // Esconde a área de mensagem de erro
             
             resultContainer.scrollIntoView({ behavior: 'smooth' });
         }
