@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste Vocacional Interativo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .question-card {
+            transition: all 0.3s ease-in-out;
+            border: 1px solid transparent;
+        }
+        .option-btn {
+            transition: all 0.2s ease-in-out;
+            border: 2px solid transparent;
+        }
+        .option-btn.selected {
+            background-color: #3b82f6; /* bg-blue-600 */
+            color: white;
+            border-color: #2563eb; /* border-blue-700 */
+        }
+        .option-btn:hover:not(.selected) {
+            background-color: #e5e7eb; /* bg-gray-200 */
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+    <div class="container mx-auto max-w-4xl p-4 sm:p-6 md:p-8">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl sm:text-4xl font-bold text-gray-900">Teste Vocacional Interativo</h1>
+            <p class="mt-2 text-md sm:text-lg text-gray-600">Descubra a área de estudo que mais combina com você!</p>
+        </header>
+
+        <main id="quiz-container" class="space-y-6">
+            <!-- As perguntas serão injetadas aqui pelo JavaScript -->
+        </main>
+
+        <footer class="text-center mt-8">
+            <button id="submit-btn" class="bg-blue-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-blue-700 transition-colors shadow-lg disabled:bg-gray-400 disabled:cursor-not-allowed">
+                Ver Meu Perfil
+            </button>
+        </footer>
+
+        <div id="result-container" class="hidden mt-10 p-6 md:p-8 bg-white rounded-2xl shadow-xl border border-gray-200">
+             <!-- O resultado será exibido aqui -->
+        </div>
+    </div>
+
+    <script>
+        const quizData = [
+            {
+                question: "No seu tempo livre, o que você mais gosta de fazer?",
+                answers: [
+                    { text: "Resolver quebra-cabeças, jogar jogos de estratégia ou programar.", profile: "exatas" },
+                    { text: "Ler sobre história, debater atualidades ou escrever textos.", profile: "humanas" },
+                    { text: "Cuidar de plantas/animais, fazer trilhas ou aprender sobre o corpo humano.", profile: "biologicas" },
+                    { text: "Desenhar, tocar um instrumento, fotografar ou criar algo novo.", profile: "artes" }
+                ]
+            },
+            {
+                question: "Se um grupo de amigos precisa de ajuda para organizar uma viagem, qual seria sua principal contribuição?",
+                answers: [
+                    { text: "Criar uma planilha detalhada com custos, rotas e horários.", profile: "exatas" },
+                    { text: "Pesquisar a cultura local, os pontos históricos e garantir que todos se comuniquem bem.", profile: "humanas" },
+                    { text: "Planejar as atividades ao ar livre, como trilhas e passeios na natureza.", profile: "biologicas" },
+                    { text: "Criar um roteiro visualmente incrível e um diário de bordo criativo para a viagem.", profile: "artes" }
+                ]
+            },
+            {
+                question: "Qual tipo de filme ou série mais te atrai?",
+                answers: [
+                    { text: "Ficção científica com tecnologias complexas e dilemas lógicos.", profile: "exatas" },
+                    { text: "Dramas históricos, documentários sociais ou thrillers políticos.", profile: "humanas" },
+                    { text: "Documentários sobre a vida selvagem, a natureza ou dramas médicos.", profile: "biologicas" },
+                    { text: "Filmes com fotografia impecável, animações ou musicais.", profile: "artes" }
+                ]
+            },
+            {
+                question: "Na escola, qual área de matérias te deixava mais à vontade?",
+                answers: [
+                    { text: "Matemática, Física e Química.", profile: "exatas" },
+                    { text: "História, Geografia, Sociologia e Português.", profile: "humanas" },
+                    { text: "Biologia e Educação Física.", profile: "biologicas" },
+                    { text: "Artes e Literatura.", profile: "artes" }
+                ]
+            },
+            {
+                question: "Qual problema você sentiria mais satisfação em resolver?",
+                answers: [
+                    { text: "Desenvolver um novo aplicativo que otimiza uma tarefa do dia a dia.", profile: "exatas" },
+                    { text: "Mediar um conflito entre dois grupos com opiniões diferentes.", profile: "humanas" },
+                    { text: "Encontrar uma forma de proteger uma espécie em extinção.", profile: "biologicas" },
+                    { text: "Criar uma campanha visual para uma causa social importante.", profile: "artes" }
+                ]
+            },
+            {
+                question: "Como você prefere aprender algo novo?",
+                answers: [
+                    { text: "Entendendo a lógica e a estrutura por trás do conceito.", profile: "exatas" },
+                    { text: "Lendo, discutindo e conectando o novo conceito com o contexto social e histórico.", profile: "humanas" },
+                    { text: "Observando na prática, experimentando e interagindo com o objeto de estudo.", profile: "biologicas" },
+                    { text: "De forma intuitiva, através de imagens, sons e sensações.", profile: "artes" }
+                ]
+            },
+            {
+                question: "Qual ambiente de trabalho te parece mais interessante?",
+                answers: [
+                    { text: "Um laboratório de tecnologia, um escritório de engenharia ou uma startup.", profile: "exatas" },
+                    { text: "Uma ONG, um escritório de advocacia, uma redação de jornal ou uma sala de aula.", profile: "humanas" },
+                    { text: "Um hospital, um laboratório de pesquisa biológica, um parque ecológico ou um consultório.", profile: "biologicas" },
+                    { text: "Um estúdio de design, uma agência de publicidade, um ateliê ou um palco.", profile: "artes" }
+                ]
+            },
+            {
+                question: "O que é mais importante para você em uma futura carreira?",
+                answers: [
+                    { text: "Resolver desafios lógicos, inovar e criar soluções eficientes.", profile: "exatas" },
+                    { text: "Ajudar pessoas, entender a sociedade e promover o diálogo.", profile: "humanas" },
+                    { text: "Cuidar da saúde e do bem-estar dos seres vivos e do planeta.", profile: "biologicas" },
+                    { text: "Expressar ideias, emoções e criar beleza e significado no mundo.", profile: "artes" }
+                ]
+            }
+        ];
+
+        const profiles = {
+            exatas: {
+                title: "Perfil: Exatas e Tecnologia 📐💻",
+                description: "Você tem um perfil lógico, analítico e aprecia resolver problemas de forma estruturada. Gosta de entender como as coisas funcionam, de encontrar padrões e de usar a tecnologia para inovar e otimizar processos. A precisão e a eficiência são importantes para você.",
+                courses: ["Engenharias (Civil, Mecânica, Elétrica, de Computação, de Produção, etc.)", "Ciência da Computação", "Sistemas de Informação", "Matemática", "Física", "Estatística", "Análise e Desenvolvimento de Sistemas"]
+            },
+            humanas: {
+                title: "Perfil: Humanas e Sociais 🗣️🌍",
+                description: "Seu perfil é comunicativo, empático e questionador. Você se interessa pelas interações humanas, pela cultura, pela história e pelos fenômenos sociais. Gosta de ler, escrever, debater ideias e entender os diferentes pontos de vista que moldam o mundo.",
+                courses: ["Direito", "Psicologia", "Jornalismo", "Relações Internacionais", "História", "Geografia", "Ciências Sociais", "Letras", "Pedagogia", "Serviço Social", "Filosofia"]
+            },
+            biologicas: {
+                title: "Perfil: Biológicas e Saúde 💚🔬",
+                description: "Você tem uma forte conexão com a vida, seja ela humana, animal ou vegetal. Seu perfil é cuidadoso, investigativo e se interessa pelos processos biológicos e pela saúde. Gosta de observar a natureza, entender o funcionamento dos organismos e promover o bem-estar.",
+                courses: ["Medicina", "Enfermagem", "Medicina Veterinária", "Nutrição", "Fisioterapia", "Ciências Biológicas", "Farmácia", "Odontologia", "Educação Física", "Biotecnologia"]
+            },
+            artes: {
+                title: "Perfil: Artes e Criatividade 🎨🎭",
+                description: "Seu perfil é criativo, expressivo e intuitivo. Você tem uma sensibilidade aguçada para a estética e para as diferentes formas de comunicação. Gosta de criar, imaginar, inovar e usar a arte para expressar emoções, contar histórias e transformar a realidade.",
+                courses: ["Design (Gráfico, de Produto, de Moda)", "Arquitetura e Urbanismo", "Artes Visuais", "Cinema e Audiovisual", "Publicidade e Propaganda", "Música", "Teatro", "Dança", "Fotografia"]
+            }
+        };
+
+        const quizContainer = document.getElementById('quiz-container');
+        const submitBtn = document.getElementById('submit-btn');
+        const resultContainer = document.getElementById('result-container');
+        let userAnswers = {};
+
+        function loadQuiz() {
+            quizData.forEach((item, index) => {
+                const questionEl = document.createElement('div');
+                questionEl.classList.add('question-card', 'bg-white', 'p-6', 'rounded-xl', 'shadow-md');
+                questionEl.dataset.questionIndex = index;
+
+                questionEl.innerHTML = `
+                    <p class="text-lg font-semibold mb-4">${index + 1}. ${item.question}</p>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        ${item.answers.map(answer => `
+                            <button class="option-btn w-full text-left p-3 bg-gray-100 rounded-lg" data-profile="${answer.profile}">
+                                ${answer.text}
+                            </button>
+                        `).join('')}
+                    </div>
+                `;
+                
+                const optionButtons = questionEl.querySelectorAll('.option-btn');
+                optionButtons.forEach(button => {
+                    button.addEventListener('click', () => {
+                        // Remove a classe 'selected' de outros botões na mesma pergunta
+                        optionButtons.forEach(btn => btn.classList.remove('selected'));
+                        // Adiciona a classe 'selected' ao botão clicado
+                        button.classList.add('selected');
+                        userAnswers[index] = button.dataset.profile;
+                    });
+                });
+
+                quizContainer.appendChild(questionEl);
+            });
+        }
+
+        function showResult() {
+            if (Object.keys(userAnswers).length < quizData.length) {
+                alert('Por favor, responda todas as perguntas antes de ver o resultado.');
+                return;
+            }
+
+            const scores = { exatas: 0, humanas: 0, biologicas: 0, artes: 0 };
+            for (const key in userAnswers) {
+                scores[userAnswers[key]]++;
+            }
+
+            const maxScore = Math.max(...Object.values(scores));
+            const bestProfiles = Object.keys(scores).filter(key => scores[key] === maxScore);
+
+            let resultHTML = '';
+
+            if(bestProfiles.length > 1) {
+                resultHTML += `<h2 class="text-2xl font-bold text-center mb-4 text-gray-900">Você tem um Perfil Misto!</h2>`;
+                resultHTML += `<p class="text-center text-gray-600 mb-6">Suas respostas indicam um forte interesse em mais de uma área. Isso é ótimo e mostra sua versatilidade! Veja os perfis que mais se destacaram:</p>`;
+            }
+
+
+            bestProfiles.forEach(profileKey => {
+                const profile = profiles[profileKey];
+                resultHTML += `
+                    <div class="mb-6 p-4 border-l-4 border-blue-500 bg-blue-50 rounded-r-lg">
+                        <h3 class="text-xl sm:text-2xl font-bold text-blue-800">${profile.title}</h3>
+                        <p class="mt-2 text-gray-700">${profile.description}</p>
+                        <p class="mt-4 font-semibold text-gray-800">Cursos sugeridos:</p>
+                        <ul class="list-disc list-inside mt-2 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-1 text-gray-600">
+                            ${profile.courses.map(course => `<li>${course}</li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+            });
+            
+            resultHTML += `<p class="text-center text-sm text-gray-500 mt-8">Lembre-se: este teste é uma ferramenta de autoconhecimento e não uma definição absoluta. Use este resultado como um ponto de partida para pesquisar mais sobre os cursos e profissões que te interessaram!</p>`;
+
+            resultContainer.innerHTML = resultHTML;
+            resultContainer.classList.remove('hidden');
+            submitBtn.classList.add('hidden');
+            quizContainer.classList.add('hidden');
+            
+            resultContainer.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        window.onload = loadQuiz;
+        submitBtn.addEventListener('click', showResult);
+
+    </script>
+
+</body>
+</html>
